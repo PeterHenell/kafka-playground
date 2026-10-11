@@ -17,7 +17,7 @@ string formats, ...) are listed under `meta.unchecked_rules` in the output,
 so it's visible what is not checked.
 
 The generic tests themselves (protobuf_decodes, protobuf_field_valid) are
-dbt macros in dbt/src/macros/protobuf_tests.sql.
+dbt macros in dbt/src/protobuf_macros/protobuf_tests.sql.
 """
 
 from dataclasses import dataclass, field as dataclass_field
@@ -341,7 +341,7 @@ def source_yaml(message: Descriptor, record: Descriptor, table: str, generated_f
             {
                 "name": "raw",
                 "description": "Binary protobuf files archived by the protobuf consumer, exposed as views "
-                "by the on-run-start hooks in dbt_project.yml (macros/raw_protobuf_views.sql).",
+                "by the on-run-start hooks in dbt_project.yml (src/protobuf_macros/raw_protobuf_views.sql).",
                 "schema": "{{ target.schema }}",
                 "tables": [
                     {

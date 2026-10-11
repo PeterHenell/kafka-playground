@@ -4,12 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Kafka learning playground: a Python producer simulates vehicles and publishes protobuf telemetry to Kafka; two consumer groups read the same topic (`vehicle-telemetry`, 3 partitions). `consumer` (group `elk-writer`) posts JSON to Logstash → Elasticsearch → Kibana; `protobuf-consumer` (group `protobuf-writer`) archives the raw records as binary protobuf files in `./data/protobuf`, which a dbt project decodes with Spark. Superset queries the dbt tables through a Spark Thrift Server. Everything runs in one Docker Compose project. README.md is the user-facing guide; dbt/README.md covers dbt, the shared catalog and the Databricks bundle.
 
+The dbt part is a **hands-on lab**: `dbt/` is the starter project (its `src/models/` and `src/macros/` are deliberately empty) and `dbt/LEARN_DBT.md` is the two-hour, step-by-step lab that builds it; `dbt_solution/` is the finished project. Keep the code blocks in `LEARN_DBT.md` identical to the solution files they produce, and keep the lab's step numbers, checks and expected output in sync when changing either.
+
 ## Commands
 
 ```bash
 make up                      # <engine> compose up -d --build (Kafka, ELK, consumers, control panel, Superset)
-make dbt                     # <engine> compose run --rm dbt build
+make dbt                     # <engine> compose run --rm dbt build  (the lab project, dbt/)
 make dbt ARGS="test --select source:raw"   # any dbt command, e.g. only the generated source tests
+make solution                # <engine> compose run --rm dbt-solution build  (dbt_solution/, schema vehicle_telemetry_solution)
 make spark                   # spark-sql shell on the shared catalog
 make invalid                 # publish invalid messages so the dbt source tests fail
 make clean                   # down -v and delete ./data (all Kafka/ES/Superset/Spark state)
@@ -32,21 +35,22 @@ There is no linter config. UIs: control panel :8090 (links to everything), Super
 
 ## Architecture: the schema drives everything
 
-`schema/proto/` is the single source of truth (`vehicle/v1/vehicle_telemetry.proto`; `kafka/v1/kafka_record.proto` is the archive file format; `elk/options.proto` defines a custom `(elk.field_type)` option; `buf/validate/validate.proto` is vendored protovalidate). `schema/generate.py` runs `protoc` via grpcio-tools and produces, in `schema/generated/`, the `*_pb2.py` modules, `descriptors/descriptor_set.desc` and the Elasticsearch index template, plus the committed dbt source tests in `dbt/src/models/sources/raw_vehicle_telemetry.yml`.
+`schema/proto/` is the single source of truth (`vehicle/v1/vehicle_telemetry.proto`; `kafka/v1/kafka_record.proto` is the archive file format; `elk/options.proto` defines a custom `(elk.field_type)` option; `buf/validate/validate.proto` is vendored protovalidate). `schema/generate.py` runs `protoc` via grpcio-tools and produces, in `schema/generated/`, the `*_pb2.py` modules, `descriptors/descriptor_set.desc` and the Elasticsearch index template, plus the committed dbt source tests in `dbt/src/sources/raw_vehicle_telemetry.yml`.
 
 - No hand-written per-field code anywhere. Runtime conversions walk protobuf descriptors: `schema/telemetry_schema/registry.py` loads all generated modules and finds message classes by full name (taken from the Kafka `message-type` header); `elk.py` maps proto types to ES types; `dbt_tests.py` translates protovalidate rules and enum checks into SQL source tests (rules it can't translate go to `meta.unchecked_rules`).
 - Every Python image runs `schema/generate.py` at build time, so after a `.proto` change rebuild (`make up`). The dbt image generates the source tests at build time and its entrypoint copies them into the mounted project. Re-run `python schema/generate.py` and commit the regenerated YAML so schema changes show in the test diff.
-- Schema evolution rules: only add fields with new numbers, never change numbers/types, `reserve` removed numbers. New fields must also be added to `dbt/src/models/staging/stg_vehicle_telemetry.sql`.
+- Schema evolution rules: only add fields with new numbers, never change numbers/types, `reserve` removed numbers. New fields must also be added to the staging model (`dbt_solution/src/models/staging/stg_vehicle_telemetry.sql`, and its copy in step 4.2 of `dbt/LEARN_DBT.md`).
 
 ## Spark / dbt / catalog
 
-- The protobuf consumer never decodes messages. Each file is one `kafka.v1.KafkaRecordBatch`; it also writes `_schema/descriptor_set.desc` next to the data on every start. Spark decodes in two `from_protobuf` steps (batch, then each record's bytes, with `emit.default.values`); see `dbt/src/macros/telemetry_source.sql` and `raw_protobuf_views.sql`.
+- The protobuf consumer never decodes messages. Each file is one `kafka.v1.KafkaRecordBatch`; it also writes `_schema/descriptor_set.desc` next to the data on every start. Spark decodes in two `from_protobuf` steps (batch, then each record's bytes, with `emit.default.values`); see `dbt/src/protobuf_macros/telemetry_source.sql` and `raw_protobuf_views.sql`.
 - Delivery is at-least-once (offsets committed after Logstash accepts / after the file is written). ES dedupes by using `message_id` as document id; dbt dedupes on `message_id` in the staging model.
 - All Spark processes (dbt in-process session mode, `spark-sql`, `spark-thrift-server`) share one Hive metastore in the `metastore-db` Postgres, configured in `spark/spark-defaults.conf` (copied into the image as `SPARK_CONF_DIR`). That is what lets them run concurrently. The metastore schema is pre-created by `metastore/init/*.sql`; `datanucleus.schema.autoCreateAll` must stay false (lazy creation deadlocks).
 - The Postgres JDBC driver, spark-protobuf and Delta Lake are installed into PySpark's own `jars` folder (`spark/install-jars.py`), not via `spark.jars.packages`: the metastore client and the Thrift Server's per-query class loader can't see packages-loaded jars. Keep the spark-protobuf version equal to the PySpark version, and the Delta version matched to it (Delta 4.4.x is for Spark 4.2); both are also in `dbt/profiles.yml`, whose `spark.jars.packages` only applies outside Docker (no `SPARK_CONF_DIR`).
-- Models are Delta tables (`+file_format: delta`); `fct_vehicle_events` is incremental (merge on `event_id`, Kafka offset watermark per partition) and `src/snapshots/dim_vehicles_snapshot.yml` snapshots `dim_vehicles`. `spark/log4j2.properties` silences the harmless HiveAlterHandler/DeltaLog noise Delta-on-Hive-metastore logs on every table replace.
-- `dbt`, `spark-sql` and `spark-thrift-server` all use the `kafka-playground-dbt` image built from `dbt/Dockerfile`; `dbt` and `spark-sql` are in the `dbt` Compose profile with `pull_policy: build` (because `up --build` skips profiled services).
-- `dbt/profiles.yml` is for local/Docker Spark; `dbt/databricks.yml` + `dbt/resources/` are the Databricks Asset Bundle, which runs the same models on a SQL warehouse against a Unity Catalog Volume. The job's dbt task sets `warehouse_id`, so Databricks generates the dbt profile itself (target `databricks_cluster`, catalog/schema from the task); don't pass `--target` or add a `profiles_directory`.
+- Lab layout: `dbt/src/sources/` (generated source YAML, a model-path) and `dbt/src/protobuf_macros/` (provided decoding macros) are shared; `dbt_solution/dbt_project.yml` points its model/macro paths at them (`../dbt/src/...`) and its Compose service `dbt-solution` mounts both folders, uses `DBT_PROFILES_DIR=/dbt` and `DBT_SCHEMA=vehicle_telemetry_solution` (read by `dbt/profiles.yml`). The lab's own macros go in `dbt/src/macros/`, so the two macro folders never define the same name.
+- Models are Delta tables (`+file_format: delta`); `fct_vehicle_events` is incremental (merge on `event_id`, watermark on `ingested_at` with a 5-minute lookback; not Kafka offsets, which restart at 0 when the topic is recreated) and `src/snapshots/dim_vehicles_snapshot.yml` snapshots `dim_vehicles`. Tests that compare a view with a table built earlier are flaky here, because the staging view always reads the newest files. `spark/log4j2.properties` silences the harmless HiveAlterHandler/DeltaLog noise Delta-on-Hive-metastore logs on every table replace.
+- `dbt`, `dbt-solution`, `spark-sql` and `spark-thrift-server` all use the `kafka-playground-dbt` image built from `dbt/Dockerfile`; `dbt`, `dbt-solution` and `spark-sql` are in the `dbt` Compose profile with `pull_policy: build` (because `up --build` skips profiled services).
+- `dbt/profiles.yml` is for local/Docker Spark; `dbt/databricks.yml` + `dbt/resources/` are the Databricks Asset Bundle, which runs the lab project's models on a SQL warehouse against a Unity Catalog Volume. The job's dbt task sets `warehouse_id`, so Databricks generates the dbt profile itself (target `databricks_cluster`, catalog/schema from the task); don't pass `--target` or add a `profiles_directory`.
 
 ## Superset
 

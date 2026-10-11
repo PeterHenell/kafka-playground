@@ -1,7 +1,7 @@
 -- One row per telemetry reading, with nested fields flattened into columns.
 --
 -- telemetry_source() decodes the binary protobuf files written by the
--- protobuf consumer (see macros/telemetry_source.sql).
+-- protobuf consumer (see dbt/src/protobuf_macros/telemetry_source.sql).
 --
 -- The consumers deliver messages at-least-once, so the same message can end
 -- up in the files more than once. We keep one row per message_id.

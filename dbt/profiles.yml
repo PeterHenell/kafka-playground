@@ -21,7 +21,9 @@ vehicle_telemetry:
       type: spark
       method: session
       host: localhost  # required by dbt-spark, not used in session mode
-      schema: vehicle_telemetry
+      # The solution (make solution) sets DBT_SCHEMA=vehicle_telemetry_solution,
+      # so its tables don't mix with the ones you build in the lab.
+      schema: "{{ env_var('DBT_SCHEMA', 'vehicle_telemetry') }}"
       threads: 1
       server_side_parameters:
         # from_protobuf lives in the spark-protobuf module, which isn't part

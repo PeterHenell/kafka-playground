@@ -1,9 +1,9 @@
 # Build context is the repository root (see docker-compose.yml), so the image
 # can include the shared schema/ folder.
 FROM python:3.12-slim
-# Spark runs on the JVM.
+# Spark runs on the JVM. dbt uses git for `dbt deps` (and `dbt debug` checks it).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openjdk-21-jre-headless procps \
+    && apt-get install -y --no-install-recommends openjdk-21-jre-headless procps git \
     && rm -rf /var/lib/apt/lists/*
 COPY dbt/requirements.txt /tmp/dbt-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/dbt-requirements.txt

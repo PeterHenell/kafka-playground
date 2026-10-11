@@ -1,0 +1,51 @@
+# The finished lab project: what dbt/ looks like after all the steps in
+# dbt/LEARN_DBT.md. Build it with `make solution`; its tables go to the
+# vehicle_telemetry_solution schema, so they don't mix with yours.
+#
+# It uses the lab project's generated sources and protobuf macros, so those
+# exist only once (in ../dbt/src).
+name: vehicle_telemetry
+version: "1.0.0"
+config-version: 2
+
+profile: vehicle_telemetry
+
+model-paths: ["src/models", "../dbt/src/sources"]
+macro-paths: ["src/macros", "../dbt/src/protobuf_macros"]
+test-paths: ["src/tests"]
+analysis-paths: ["src/analyses"]
+seed-paths: ["src/seeds"]
+snapshot-paths: ["src/snapshots"]
+
+clean-targets:
+  - target
+  - dbt_packages
+
+vars:
+  # Where the protobuf consumer writes its files. Locally this is the ./data
+  # folder in the repo; the Databricks job overrides it with a Unity Catalog
+  # Volume path.
+  raw_path: "{{ env_var('RAW_DATA_PATH', '../data/protobuf/vehicle_telemetry') }}"
+  # The compiled schema the consumer writes next to the files.
+  descriptor_path: "{{ env_var('RAW_DATA_PATH', '../data/protobuf/vehicle_telemetry') }}/_schema/descriptor_set.desc"
+  # The protobuf message type to decode.
+  message_type: vehicle.v1.VehicleTelemetry
+  # Below this fuel level, vehicle_latest_status flags a vehicle (step 10).
+  low_fuel_pct: 15
+
+# Views over the raw protobuf files, used as dbt sources (see
+# ../dbt/src/protobuf_macros/raw_protobuf_views.sql and ../dbt/src/sources/).
+on-run-start:
+  - "{{ create_raw_schema() }}"
+  - "{{ create_raw_files_view('vehicle_telemetry') }}"
+  - "{{ create_raw_records_view('vehicle_telemetry') }}"
+
+models:
+  vehicle_telemetry:
+    # Delta Lake tables, as on Databricks (where it's the default). Locally,
+    # the incremental model (step 13) needs it.
+    +file_format: delta
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

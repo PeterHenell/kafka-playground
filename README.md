@@ -9,10 +9,12 @@ same stream, each in its own consumer group:
 - **consumer** stores the messages in an ELK stack (Elasticsearch, Logstash,
   Kibana), where you can search, chart and map them in near real time.
 - **protobuf-consumer** archives the messages, still in binary protobuf, to
-  files. A [dbt project](dbt/README.md) decodes them with Apache Spark and
-  turns them into analytics tables, which you can browse, query and chart in
-  [Apache Superset](https://superset.apache.org/). The same dbt project can
-  be deployed to Databricks as an Asset Bundle.
+  files. A dbt project decodes them with Apache Spark and turns them into
+  analytics tables, which you can browse, query and chart in
+  [Apache Superset](https://superset.apache.org/). You build that project
+  yourself in a [hands-on dbt lab](dbt/LEARN_DBT.md); the finished version is
+  in [dbt_solution/](dbt_solution/README.md). The same dbt project can be
+  deployed to Databricks as an Asset Bundle.
 
 The message format is defined once, in a `.proto` file. Everything else
 (the Python classes, the conversion to Elasticsearch documents, the
@@ -63,7 +65,8 @@ The Makefile has shortcuts for the common tasks (run `make` to list them):
 | `make down`     | Stop everything; the data is kept                                         |
 | `make ps`       | Show the status of the services                                           |
 | `make logs`     | Follow the logs of the producer and the consumers                         |
-| `make dbt`      | Run `dbt build` on Spark; other commands with `make dbt ARGS="test"`      |
+| `make dbt`      | Run `dbt build` on your lab project (`dbt/`); other commands with `make dbt ARGS="test"` |
+| `make solution` | Run `dbt build` on the finished project (`dbt_solution/`)                 |
 | `make spark`    | Open a Spark SQL shell on the dbt tables                                  |
 | `make superset` | Show where Superset runs and how to log in                                |
 | `make invalid`  | Publish a few invalid messages, to see the dbt source tests fail          |
@@ -131,16 +134,23 @@ A data view called **Vehicle telemetry** is created automatically.
 ### Processing the protobuf files with dbt
 
 The protobuf consumer writes a file to `data/protobuf/vehicle_telemetry/date=YYYY-MM-DD/`
-every 60 seconds (or every 5000 messages). Once the first file is there, build
-the dbt models on Spark:
+every 60 seconds (or every 5000 messages). Turning them into tables is a
+hands-on lab: [dbt/LEARN_DBT.md](dbt/LEARN_DBT.md) walks you through building
+the dbt project in `dbt/`, step by step, in about two hours.
+
+To get the finished tables right away, build the solution, once the first
+file is there:
 
 ```bash
-docker compose run --rm dbt build
-docker compose run --rm dbt show --select fct_vehicle_daily
+make solution                                        # docker compose run --rm dbt-solution build
+make solution ARGS="show --select fct_vehicle_daily"
 ```
 
-See [dbt/README.md](dbt/README.md) for the models, and for how to deploy the
-project to Databricks as a Databricks Asset Bundle.
+Its tables go to the schema `vehicle_telemetry_solution`; the lab builds into
+`vehicle_telemetry`. See [dbt/README.md](dbt/README.md) for how the project
+reads the protobuf files and how to deploy it to Databricks as a Databricks
+Asset Bundle, and [dbt_solution/README.md](dbt_solution/README.md) for the
+models.
 
 ### Exploring the tables in Superset
 
@@ -150,11 +160,12 @@ project to Databricks as a Databricks Asset Bundle.
 **Spark (vehicle telemetry)**.
 
 - **SQL Lab** (menu → SQL → SQL Lab, http://localhost:8088/sqllab/): the
-  left side is a catalog browser. Pick the `vehicle_telemetry` schema to see
+  left side is a catalog browser. Pick the `vehicle_telemetry_solution`
+  schema (or `vehicle_telemetry`, for the tables you built in the lab) to see
   its tables and views and their columns, and write queries on the right,
-  e.g. `select * from vehicle_telemetry.fct_vehicle_daily`. The raw sources
-  are there too: `stg_vehicle_telemetry` is a view that decodes the protobuf
-  archive with `from_protobuf` on every query.
+  e.g. `select * from vehicle_telemetry_solution.fct_vehicle_daily`. The raw
+  sources are there too: `stg_vehicle_telemetry` is a view that decodes the
+  protobuf archive with `from_protobuf` on every query.
 - **Charts and dashboards**: turn a table (menu → Datasets → + Dataset) or a
   SQL Lab query (*Save dataset*) into a dataset, then chart it, e.g. distance
   per vehicle and day from `fct_vehicle_daily`.
@@ -189,7 +200,8 @@ own settings, charts and dashboards in the `superset-home` volume.
 | `common/kafka_control.py`              | Pause/resume through the `playground-control` topic              |
 | `consumer/consumer.py`                 | Reads from Kafka, posts batches to Logstash                       |
 | `protobuf-consumer/protobuf_consumer.py` | Reads from Kafka, writes binary protobuf files to `./data/protobuf` |
-| `dbt/`                                 | dbt project (Spark locally) and Databricks Asset Bundle           |
+| `dbt/`                                 | The dbt lab (`LEARN_DBT.md`): starter project and Databricks Asset Bundle |
+| `dbt_solution/`                        | The finished dbt project                                          |
 | `elk/logstash/pipeline/*.conf`         | Logstash pipeline: HTTP in, Elasticsearch out                     |
 | `elk/setup/setup.py`                   | Installs the generated index template and the Kibana data view    |
 | `kafka-ui/config.yml`                  | Lets Kafka UI decode the protobuf messages                        |
@@ -243,7 +255,7 @@ services need, in `schema/generated/`:
 | `kafka/v1/kafka_record_pb2.py`          | `protoc`                      | protobuf-consumer, file format       |
 | `descriptors/descriptor_set.desc`       | `protoc`                      | Spark's `from_protobuf`, to decode   |
 | `elasticsearch/index_template.json`     | `telemetry_schema/elk.py`     | `elk-setup`, to create the mapping   |
-| `dbt/src/models/sources/raw_vehicle_telemetry.yml` | `telemetry_schema/dbt_tests.py` | dbt, to validate the archived messages (see [Validating the messages](#validating-the-messages)) |
+| `dbt/src/sources/raw_vehicle_telemetry.yml` | `telemetry_schema/dbt_tests.py` | dbt, to validate the archived messages (see [Validating the messages](#validating-the-messages)) |
 
 The conversions at runtime don't use any hand-written, per-field code. They
 walk the protobuf *descriptors*, the schema information that `protoc` embeds
@@ -283,7 +295,7 @@ data/protobuf/vehicle_telemetry/
 ```
 
 Decoding takes two `from_protobuf` calls: one for the file, one for each
-record's bytes. See `dbt/src/macros/telemetry_source.sql`, or try it in the
+record's bytes. See `dbt/src/protobuf_macros/telemetry_source.sql`, or try it in the
 Spark SQL shell (`docker compose run --rm spark-sql`):
 
 ```sql
@@ -316,7 +328,7 @@ these options, copied from its repository.)
 
 `schema/generate.py` turns the schema into **dbt source tests**
 (`telemetry_schema/dbt_tests.py` writes
-`dbt/src/models/sources/raw_vehicle_telemetry.yml`). They run against the
+`dbt/src/sources/raw_vehicle_telemetry.yml`). They run against the
 archived Kafka records, before any model is built, and check that every
 message:
 
@@ -364,7 +376,8 @@ The result:
 To keep old and new messages compatible, only add fields with new numbers.
 Never change the number or type of an existing field, and `reserve` the
 numbers of removed fields. The dbt models list the columns they use, so add
-new fields to `dbt/src/models/staging/stg_vehicle_telemetry.sql` to use them
+new fields to the staging model (`stg_vehicle_telemetry.sql`, in `dbt/` and
+`dbt_solution/`) to use them
 there.
 
 ### Delivery guarantees
@@ -451,7 +464,7 @@ The converters have unit tests: `pip install pytest && python -m pytest schema/t
    messages that break the schema in different ways (garbage bytes, an unknown
    enum value, a speed of 999, bad patterns, missing required fields). Wait a
    minute for the protobuf consumer to write them to a file, then run
-   `docker compose run --rm dbt build`: the source tests fail, one per kind
+   `make solution`: the source tests fail, one per kind
    of problem, and the models are skipped. To start clean again, run
    `docker compose down -v` and delete `./data`.
 8. **Break things.** Stop Logstash (`docker compose stop logstash`) and see the

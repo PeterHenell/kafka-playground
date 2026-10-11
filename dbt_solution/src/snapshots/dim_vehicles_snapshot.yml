@@ -12,3 +12,5 @@ snapshots:
       # new readings. (strategy: check compares chosen columns instead.)
       strategy: timestamp
       updated_at: last_seen_at
+      # Snapshots need Delta Lake locally (it's the default on Databricks).
+      file_format: delta

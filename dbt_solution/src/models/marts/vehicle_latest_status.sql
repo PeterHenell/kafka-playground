@@ -9,8 +9,9 @@ select
     speed_kmh,
     engine_temp_c,
     fuel_level_pct,
+    fuel_level_pct < {{ var('low_fuel_pct') }} as is_low_on_fuel,
     battery_voltage,
-    least(tire_front_left_kpa, tire_front_right_kpa, tire_rear_left_kpa, tire_rear_right_kpa) as min_tire_pressure_kpa,
+    {{ min_tire_pressure() }} as min_tire_pressure_kpa,
     check_engine_light,
     dtc_codes
 

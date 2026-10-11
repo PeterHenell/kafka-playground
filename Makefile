@@ -23,7 +23,7 @@ WAREHOUSE_ID ?=
 DAB_FLAGS = -t $(DAB_TARGET) $(if $(CATALOG),--var catalog=$(CATALOG)) $(if $(WAREHOUSE_ID),--var warehouse_id=$(WAREHOUSE_ID))
 
 .DEFAULT_GOAL := help
-.PHONY: help up down restart ps logs dbt spark superset panel invalid clean dab-validate dab-deploy dab-upload dab-run
+.PHONY: help up down restart ps logs dbt solution spark superset panel invalid clean dab-validate dab-deploy dab-upload dab-run
 
 help: ## List the targets
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  make %-13s %s\n", $$1, $$2}'
@@ -44,8 +44,11 @@ ps: ## Show the status of the services
 logs: ## Follow the logs of the producer and consumers (Ctrl+C to stop)
 	$(COMPOSE) logs -f producer consumer protobuf-consumer
 
-dbt: ## Run dbt on Spark: `dbt build` by default, or make dbt ARGS="..."
+dbt: ## Run dbt on your lab project (dbt/): `dbt build`, or make dbt ARGS="..."
 	$(COMPOSE) run --rm dbt $(ARGS)
+
+solution: ## Run dbt on the finished project (dbt_solution/), into schema vehicle_telemetry_solution
+	$(COMPOSE) run --rm dbt-solution $(ARGS)
 
 spark: ## Open a Spark SQL shell on the dbt tables
 	$(COMPOSE) run --rm spark-sql

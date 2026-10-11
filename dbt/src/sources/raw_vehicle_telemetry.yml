@@ -6,7 +6,7 @@ version: 2
 sources:
 - name: raw
   description: Binary protobuf files archived by the protobuf consumer, exposed as views by the on-run-start hooks in dbt_project.yml
-    (macros/raw_protobuf_views.sql).
+    (src/protobuf_macros/raw_protobuf_views.sql).
   schema: '{{ target.schema }}'
   tables:
   - name: vehicle_telemetry_files

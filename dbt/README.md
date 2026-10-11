@@ -1,14 +1,19 @@
-# vehicle_telemetry dbt project
+# vehicle_telemetry dbt lab
 
-New to dbt? [LEARN_DBT.md](LEARN_DBT.md) is a one-hour walkthrough of the dbt
-concepts, using this project as the example.
+This folder is a **hands-on dbt lab**: you build a dbt project that decodes
+the binary protobuf files written by the protobuf consumer and turns them
+into analytics tables. Start with [LEARN_DBT.md](LEARN_DBT.md), a two-hour,
+step-by-step lab for data engineers who know Databricks but not dbt.
 
-Decodes the binary protobuf files written by the protobuf consumer and turns
-them into tables that are easy to analyse. The same project runs in two places:
+`src/models/` and `src/macros/` start empty; you fill them during the lab.
+The finished project is in [../dbt_solution](../dbt_solution/README.md).
+`make solution` builds it into its own schema, `vehicle_telemetry_solution`.
+
+The same project runs in two places:
 
 - **Locally on Apache Spark**: dbt starts Spark inside its own process
-  (dbt-spark's `session` method, i.e. PySpark). Tables are stored as Parquet
-  files in `../data/spark/warehouse`, and the table catalog (the Hive
+  (dbt-spark's `session` method, i.e. PySpark). Tables are stored as Delta
+  tables in `../data/spark/warehouse`, and the table catalog (the Hive
   metastore) in the `metastore-db` Postgres container, shared with the
   `spark-sql` shell and the Spark Thrift Server that Superset queries.
 - **On Databricks**: deployed as a Databricks Asset Bundle (DAB), running on
@@ -16,19 +21,21 @@ them into tables that are easy to analyse. The same project runs in two places:
 
 Both are Spark SQL, so the models are the same SQL in both places.
 
-## Sources and models
+## What's provided
 
-```
-source raw.vehicle_telemetry_records ──> stg_vehicle_telemetry ──┬──> dim_vehicles           one row per vehicle ──> dim_vehicles_snapshot (its history)
-(view over the protobuf files;           (view: decoded,        ├──> fct_vehicle_daily      distance and health per vehicle and day
- generated schema tests)                  flattened, de-dup.)   ├──> fct_vehicle_events     one row per event (harsh_braking, …), incremental
-                                                                 └──> vehicle_latest_status  latest reading per vehicle
-```
+| Path                    | What it is                                                     |
+|-------------------------|----------------------------------------------------------------|
+| `dbt_project.yml`       | The project, with the variables and hooks that read the raw files |
+| `profiles.yml`          | The local Spark profile                                        |
+| `src/sources/`          | The source declaration and its tests, generated from the `.proto` files |
+| `src/protobuf_macros/`  | Macros that read and decode the protobuf files                 |
+| `src/models/`, `src/macros/` | Empty: yours to fill in the lab                           |
+| `databricks.yml`, `resources/` | The Databricks Asset Bundle                             |
 
 ### Sources and the generated schema tests
 
 The files written by the protobuf consumer are exposed as two views, created
-by `on-run-start` hooks in `dbt_project.yml` (`macros/raw_protobuf_views.sql`):
+by `on-run-start` hooks in `dbt_project.yml` (`src/protobuf_macros/raw_protobuf_views.sql`):
 
 | Source                           | Rows                                                                          |
 |----------------------------------|-------------------------------------------------------------------------------|
@@ -36,12 +43,12 @@ by `on-run-start` hooks in `dbt_project.yml` (`macros/raw_protobuf_views.sql`):
 | `raw.vehicle_telemetry_records`  | one per Kafka record: the `kafka.v1.KafkaRecord` fields; the message is still serialized in `value` |
 
 They are declared, together with their tests, in
-`src/models/sources/raw_vehicle_telemetry.yml`. **That file is generated** by
+`src/sources/raw_vehicle_telemetry.yml`. **That file is generated** by
 `schema/generate.py` from the `.proto` files; don't edit it. The tests check
 that every message decodes, uses only enum values defined in the schema, and
 follows the protovalidate rules in the `.proto` file (see
 [Validating the messages](../README.md#validating-the-messages)). They use two
-generic tests from `macros/protobuf_tests.sql`:
+generic tests from `src/protobuf_macros/protobuf_tests.sql`:
 
 - `protobuf_decodes`: fails for bytes that aren't a valid message of the
   given type (`from_protobuf` in PERMISSIVE mode returns NULL for them).
@@ -58,16 +65,12 @@ into the project before every dbt command (`docker-entrypoint.sh`). Running
 dbt on your machine, regenerate it yourself after a schema change:
 `python schema/generate.py` (in the producer/consumers' virtual environment).
 
-### Models
+### Decoding the messages
 
-- `stg_vehicle_telemetry` removes duplicates. Both consumers deliver
-  *at-least-once*, so a message can show up in more than one file.
-  It also computes the distance driven since each vehicle's previous reading,
-  and lower-cases the protobuf enum names (`HARSH_BRAKING` → `harsh_braking`).
-- The messages are decoded by the `telemetry_source()` macro, with Spark's
-  `from_protobuf`: the records view has already decoded each file into a
-  `KafkaRecordBatch`, and the macro decodes each record's bytes into the
-  message type in the `message_type` var. It
+- The `telemetry_source()` macro (`src/protobuf_macros/telemetry_source.sql`)
+  decodes the messages with Spark's `from_protobuf`: the records view has
+  already decoded each file into a `KafkaRecordBatch`, and the macro decodes
+  each record's bytes into the message type in the `message_type` var. It
   decodes with the descriptor set that the consumer writes to
   `_schema/descriptor_set.desc`, which always describes the newest schema.
   Protobuf can decode older messages with a newer schema; fields that didn't
@@ -75,35 +78,24 @@ dbt on your machine, regenerate it yourself after a schema change:
 - `from_protobuf` is part of the spark-protobuf module, which PySpark doesn't
   include. The Docker image installs it; running dbt on your machine, Spark
   downloads it from Maven Central on the first run (see `spark.jars.packages`
-  in `profiles.yml`). Databricks has it built in.
-- The marts are Delta tables (`+file_format: delta` in `dbt_project.yml`), as
-  on Databricks. Locally, Delta Lake is installed the same way as
-  spark-protobuf.
-- `fct_vehicle_events` is *incremental*: each run only adds the events from
-  Kafka records it hasn't seen yet (a higher offset than the highest one in
-  the table, per partition), and merges on `event_id`, so a message delivered
-  twice doesn't add a second row. `dbt build --full-refresh` rebuilds it.
-- `dim_vehicles_snapshot` (`src/snapshots/`) is a *snapshot* of
-  `dim_vehicles`: every run adds a new version of the vehicles that sent new
-  readings, with `dbt_valid_from`/`dbt_valid_to`. It holds the only copy of
-  that history, so `make clean` loses it.
+  in `profiles.yml`). Databricks has it built in. Delta Lake is installed the
+  same way.
 - Reading the files is the only part that differs between local Spark and
   Databricks, so that macro (`raw_protobuf_files()`) is *dispatched*: dbt
   picks the Spark or the Databricks implementation depending on the adapter.
-- The staging model lists the columns it uses. When you add a field to the
-  `.proto` file, it is available in `telemetry_source()` right away; add it
-  to the staging model to use it downstream.
-- Model tests (`dbt build` runs them) check uniqueness, not-null columns,
-  accepted values and relationships. See the `_*.yml` files next to the models.
+- When you add a field to the `.proto` file, it is available in
+  `telemetry_source()` right away; add it to the staging model to use it
+  downstream.
 
 ## Running locally with Spark
 
-The easiest way is through Docker Compose, from the repository root:
+The easiest way is through Docker Compose, from the repository root
+(`make dbt` and `make solution` are shortcuts for these):
 
 ```bash
-docker compose run --rm dbt build                               # build models + run tests
+docker compose run --rm dbt build                               # build your lab project + run tests
 docker compose run --rm dbt show --select fct_vehicle_daily     # preview a model
-docker compose run --rm dbt show --inline "select * from {{ ref('fct_vehicle_events') }} where event_type = 'engine_overheating'"
+docker compose run --rm dbt-solution build                      # build the finished project
 ```
 
 The protobuf consumer writes a file every 60 seconds, so give it a minute
@@ -117,8 +109,8 @@ a Spark SQL shell:
 
 ```bash
 docker compose run --rm spark-sql
-spark-sql (default)> show tables in vehicle_telemetry;
-spark-sql (default)> select * from vehicle_telemetry.vehicle_latest_status;
+spark-sql (default)> show tables in vehicle_telemetry_solution;
+spark-sql (default)> select * from vehicle_telemetry_solution.vehicle_latest_status;
 ```
 
 Both can run while dbt is running. Every Spark process (dbt, the shell, the
@@ -167,11 +159,12 @@ because they're in the `dbt` profile. Their services now set
 (quick, thanks to the build cache). If you still have an old image, rebuild
 it once with `docker compose build dbt`, then run `docker compose run --rm dbt build`.
 
-**`UNRESOLVED_COLUMN` … `kafka_partition` in `fct_vehicle_events`**, or
-another error about an existing table after updating the project. The table
-was created by an older version of the model (before it was incremental and
-before the tables were Delta). Rebuild the models once with
-`docker compose run --rm dbt build --full-refresh`.
+**`UNRESOLVED_COLUMN` or `UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY` in an
+incremental model**, or another error about an existing table after changing
+a model. The table was created by an older version of the model, e.g. with
+fewer columns, or before the tables were Delta. Rebuild the models once with
+`--full-refresh` (`make dbt ARGS="build --full-refresh"`, or
+`make solution ARGS="build --full-refresh"`).
 
 **`LOCATION_ALREADY_EXISTS` when dbt creates a table.** The table's folder
 exists in `./data/spark/warehouse` but the catalog doesn't know the table,
@@ -181,6 +174,8 @@ to delete the folders: `rm -rf ./data/spark/warehouse ./data/spark/metastore_db`
 Then run `docker compose run --rm dbt build` again.
 
 ## Deploying to Databricks as an Asset Bundle
+
+The bundle deploys this folder: the project you build in the lab.
 
 Files involved:
 

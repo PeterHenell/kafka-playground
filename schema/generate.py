@@ -15,7 +15,7 @@ Writes to schema/generated/ (not committed, recreated on every run):
 and, when the dbt project is next to it, the dbt source tests that check the
 archived messages against the schema (committed, so they can be reviewed):
 
-    dbt/src/models/sources/raw_vehicle_telemetry.yml
+    dbt/src/sources/raw_vehicle_telemetry.yml
 
 The Docker images run this script while they are built, so after changing a
 .proto file, `docker compose up -d --build` is all it takes.
@@ -24,7 +24,7 @@ Configuration (environment variables):
     MESSAGE_TYPE     default: vehicle.v1.VehicleTelemetry
     INDEX_PATTERN    default: vehicle-telemetry-*
     ARCHIVE_NAME     default: vehicle_telemetry (names the dbt source tables)
-    DBT_SOURCES_DIR  default: dbt/src/models/sources, if the dbt project exists
+    DBT_SOURCES_DIR  default: dbt/src/sources, if the dbt project exists
 """
 
 import json
@@ -48,7 +48,7 @@ INDEX_PATTERN = os.getenv("INDEX_PATTERN", "vehicle-telemetry-*")
 ARCHIVE_NAME = os.getenv("ARCHIVE_NAME", "vehicle_telemetry")
 DBT_PROJECT_DIR = SCHEMA_DIR.parent / "dbt"
 DBT_SOURCES_DIR = os.getenv("DBT_SOURCES_DIR") or (
-    str(DBT_PROJECT_DIR / "src" / "models" / "sources") if DBT_PROJECT_DIR.is_dir() else None
+    str(DBT_PROJECT_DIR / "src" / "sources") if DBT_PROJECT_DIR.is_dir() else None
 )
 
 

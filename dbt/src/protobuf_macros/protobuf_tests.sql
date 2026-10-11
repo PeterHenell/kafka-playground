@@ -1,6 +1,6 @@
 {#
   Generic tests for serialized protobuf messages. schema/generate.py applies
-  them to the raw sources (src/models/sources/raw_*.yml), based on the
+  them to the raw sources (src/sources/raw_*.yml), based on the
   .proto files. They decode with Spark's from_protobuf in PERMISSIVE mode,
   which returns NULL instead of failing when the bytes aren't a valid
   message.

@@ -15,7 +15,7 @@
 // protovalidate format (https://protovalidate.com). They describe what a
 // valid message looks like beyond its types: required fields, ranges,
 // patterns. schema/generate.py turns them into dbt tests that check the
-// archived messages (see dbt/src/models/sources/).
+// archived messages (see dbt/src/sources/).
 syntax = "proto3";
 
 package vehicle.v1;

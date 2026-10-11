@@ -284,10 +284,11 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # dbt on Apache Spark (in-process PySpark), run on demand (it is not
-  # started by `docker compose up`):
+  # dbt on Apache Spark (in-process PySpark), on the lab project in dbt/
+  # (see dbt/LEARN_DBT.md). Run on demand (it is not started by
+  # `docker compose up`):
   #   docker compose run --rm dbt build
-  #   docker compose run --rm dbt show --select fct_vehicle_daily
+  #   docker compose run --rm dbt show --select stg_vehicle_telemetry
   dbt:
     build:
       context: .
@@ -309,9 +310,34 @@ services:
       metastore-db:
         condition: service_healthy
 
+  # The finished lab project (dbt_solution/), built into its own schema:
+  #   docker compose run --rm dbt-solution build
+  # It shares the lab's profile, generated sources and protobuf macros, so
+  # the lab project is mounted too.
+  dbt-solution:
+    build:
+      context: .
+      dockerfile: dbt/Dockerfile
+    image: kafka-playground-dbt
+    pull_policy: build
+    profiles: ["dbt"]
+    working_dir: /solution
+    environment:
+      RAW_DATA_PATH: /data/protobuf/vehicle_telemetry
+      SPARK_IVY_DIR: /data/spark/ivy
+      DBT_PROFILES_DIR: /dbt
+      DBT_SCHEMA: vehicle_telemetry_solution
+    volumes:
+      - ./dbt:/dbt
+      - ./dbt_solution:/solution
+      - ./data:/data
+    depends_on:
+      metastore-db:
+        condition: service_healthy
+
   # Interactive Spark SQL shell on the tables dbt built:
   #   docker compose run --rm spark-sql
-  #   spark-sql> select * from vehicle_telemetry.fct_vehicle_daily;
+  #   spark-sql> select * from vehicle_telemetry_solution.fct_vehicle_daily;
   spark-sql:
     build:
       context: .

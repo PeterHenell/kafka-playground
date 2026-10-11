@@ -1,3 +1,5 @@
+# The dbt project you build during the lab (see LEARN_DBT.md). The finished
+# version is in ../dbt_solution.
 name: vehicle_telemetry
 version: "1.0.0"
 config-version: 2
@@ -6,8 +8,8 @@ profile: vehicle_telemetry
 
 # Everything dbt-related lives in src/, so the Databricks bundle files
 # (databricks.yml, resources/) can sit next to it.
-model-paths: ["src/models"]
-macro-paths: ["src/macros"]
+model-paths: ["src/models", "src/sources"]
+macro-paths: ["src/macros", "src/protobuf_macros"]
 test-paths: ["src/tests"]
 analysis-paths: ["src/analyses"]
 seed-paths: ["src/seeds"]
@@ -16,6 +18,11 @@ snapshot-paths: ["src/snapshots"]
 clean-targets:
   - target
   - dbt_packages
+
+# ---------------------------------------------------------------------------
+# Provided for you: reading the raw protobuf files. LEARN_DBT.md explains
+# these settings in step 10.
+# ---------------------------------------------------------------------------
 
 vars:
   # Where the protobuf consumer writes its files. Locally this is the ./data
@@ -28,22 +35,12 @@ vars:
   message_type: vehicle.v1.VehicleTelemetry
 
 # Views over the raw protobuf files, used as dbt sources (see
-# macros/raw_protobuf_views.sql and src/models/sources/).
+# src/protobuf_macros/raw_protobuf_views.sql and src/sources/).
 on-run-start:
   - "{{ create_raw_schema() }}"
   - "{{ create_raw_files_view('vehicle_telemetry') }}"
   - "{{ create_raw_records_view('vehicle_telemetry') }}"
 
-models:
-  vehicle_telemetry:
-    # Delta Lake tables, as on Databricks. Incremental models that merge, and
-    # snapshots, need it.
-    +file_format: delta
-    staging:
-      +materialized: view
-    marts:
-      +materialized: table
-
-snapshots:
-  vehicle_telemetry:
-    +file_format: delta
+# ---------------------------------------------------------------------------
+# Your configuration: you add a `models:` section here in step 6.
+# ---------------------------------------------------------------------------

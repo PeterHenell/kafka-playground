@@ -16,7 +16,7 @@ select
     max(engine_temp_c) as max_engine_temp_c,
     min(fuel_level_pct) as min_fuel_level_pct,
     min(battery_voltage) as min_battery_voltage,
-    min(least(tire_front_left_kpa, tire_front_right_kpa, tire_rear_left_kpa, tire_rear_right_kpa)) as min_tire_pressure_kpa,
+    min({{ min_tire_pressure() }}) as min_tire_pressure_kpa,
 
     sum(case when array_contains(events, 'harsh_braking') then 1 else 0 end) as harsh_braking_count,
     sum(case when array_contains(events, 'harsh_acceleration') then 1 else 0 end) as harsh_acceleration_count,

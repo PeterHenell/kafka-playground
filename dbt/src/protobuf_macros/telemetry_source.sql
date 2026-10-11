@@ -4,7 +4,7 @@
   kafka_offset, kafka_timestamp, ingested_at).
 
   It reads the raw_vehicle_telemetry_records source, a view with one row per
-  Kafka record (see macros/raw_protobuf_views.sql), and decodes each record's
+  Kafka record (see raw_protobuf_views.sql), and decodes each record's
   `value` with Spark's from_protobuf into the message type in
   var('message_type'), using the descriptor set the consumer writes next to
   the files.
@@ -14,7 +14,7 @@
   value.
 
   Messages that aren't valid protobuf are skipped (PERMISSIVE mode). The
-  generated source tests in src/models/sources/ report them, and `dbt build`
+  generated source tests in src/sources/ report them, and `dbt build`
   doesn't build the models while those tests fail.
 #}
 {% macro telemetry_source() %}
