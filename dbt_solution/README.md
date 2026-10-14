@@ -29,7 +29,10 @@ source raw.vehicle_telemetry_records ──> stg_vehicle_telemetry ──┬─�
   *at-least-once*, so a message can show up in more than one file. It also
   computes the distance driven since each vehicle's previous reading, and
   lower-cases the protobuf enum names (`HARSH_BRAKING` → `harsh_braking`).
-  It lists the columns it uses: add new `.proto` fields here to use them.
+  It maps the VSS signals in the nested `Vehicle` struct to flat columns
+  (`Vehicle.Speed` → `speed_kmh`, `Vehicle.TraveledDistance` in meters →
+  `odometer_km`), so the marts don't depend on the VSS paths. It lists the
+  columns it uses: add new `.proto` fields here to use them.
 - The marts are Delta tables (`+file_format: delta` in `dbt_project.yml`), as
   on Databricks.
 - `fct_vehicle_events` is *incremental*: each run only processes the readings

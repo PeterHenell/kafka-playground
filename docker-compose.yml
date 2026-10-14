@@ -142,8 +142,8 @@ services:
       retries: 30
 
   # One-shot job: installs the Elasticsearch index template generated from
-  # the .proto files (so e.g. `position` is a geo_point and can be shown on a
-  # map) and creates a Kibana data view.
+  # the .proto files (so e.g. `Vehicle.CurrentLocation.GeoPoint` is a
+  # geo_point and can be shown on a map) and creates a Kibana data view.
   elk-setup:
     build:
       context: .

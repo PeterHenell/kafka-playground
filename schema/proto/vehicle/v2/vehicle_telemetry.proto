@@ -1,0 +1,66 @@
+// Telemetry message sent by every vehicle, once per tick.
+//
+// The message is an envelope around the vehicle's signals: the fields that
+// say which message this is and when and by whom it was sent, and a `Vehicle`
+// field with the signals themselves, in the COVESA Vehicle Signal
+// Specification format (see vss/v6/vss.proto). So a reading's speed is at
+// Vehicle.Speed, the same path as in VSS.
+//
+// This file is the single source of truth for the message format. After
+// changing it, regenerate the code (python schema/generate.py, or rebuild the
+// containers with docker compose up -d --build) and the producer, both
+// consumers and the Elasticsearch mapping pick up the new schema.
+//
+// Rules for changing it without breaking old messages still in Kafka:
+//   - Add new fields with new field numbers.
+//   - Never change the number or type of an existing field.
+//   - When removing a field, reserve its number and name
+//     (reserved 5; reserved "events";) so they are never reused.
+// A change that breaks these rules needs a new package (vehicle.v3), like
+// the move from vehicle.v1 to this VSS-based vehicle.v2.
+//
+// The [(buf.validate.field)...] annotations are validation rules in the
+// protovalidate format (https://protovalidate.com). They describe what a
+// valid message looks like beyond its types: required fields, ranges,
+// patterns. schema/generate.py turns them into dbt tests that check the
+// archived messages (see dbt/src/sources/).
+syntax = "proto3";
+
+package vehicle.v2;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+import "vss/v6/vss.proto";
+
+message VehicleTelemetry {
+  // Unique per message. Used to de-duplicate at-least-once deliveries.
+  string message_id = 1 [(buf.validate.field).string.uuid = true];
+  // Our fleet's name for the vehicle. Also the Kafka message key.
+  string vehicle_id = 2 [(buf.validate.field).string.pattern = "^vehicle-[0-9]{3}$"];
+  // When the vehicle took the reading.
+  google.protobuf.Timestamp timestamp = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.lt_now = true
+  ];
+  // The vehicle signals, in the VSS tree. Named like the VSS root branch, so
+  // the paths in Elasticsearch and Spark are the VSS paths (Vehicle.Speed).
+  vss.v6.Vehicle Vehicle = 4 [(buf.validate.field).required = true];
+  // Events the vehicle's telematics unit detected since the previous
+  // reading. Not part of VSS: VSS has signals (values), not events.
+  repeated Event events = 5 [
+    (buf.validate.field).repeated.unique = true,
+    (buf.validate.field).repeated.items.enum.defined_only = true,
+    (buf.validate.field).repeated.items.enum.not_in = 0
+  ];
+}
+
+enum Event {
+  EVENT_UNSPECIFIED = 0;
+  HARSH_BRAKING = 1;
+  HARSH_ACCELERATION = 2;
+  SPEEDING = 3;
+  ENGINE_OVERHEATING = 4;
+  LOW_FUEL = 5;
+  REFUELED = 6;
+  LOW_TIRE_PRESSURE = 7;
+}

@@ -3,8 +3,11 @@
 A small, self-contained setup for learning Apache Kafka. A Python producer
 simulates a fleet of vehicles that send telemetry (position, speed, engine
 temperature, fuel level, tire pressure...) to Kafka as
-[Protocol Buffers](https://protobuf.dev/) messages. Two consumers read the
-same stream, each in its own consumer group:
+[Protocol Buffers](https://protobuf.dev/) messages. The readings follow the
+[COVESA Vehicle Signal Specification](https://covesa.github.io/vehicle_signal_specification/)
+(VSS), an open standard for naming vehicle data: the speed is
+`Vehicle.Speed`, the fuel level `Vehicle.Powertrain.FuelSystem.RelativeLevel`.
+Two consumers read the same stream, each in its own consumer group:
 
 - **consumer** stores the messages in an ELK stack (Elasticsearch, Logstash,
   Kibana), where you can search, chart and map them in near real time.
@@ -16,7 +19,7 @@ same stream, each in its own consumer group:
   in [dbt_solution/](dbt_solution/README.md). The same dbt project can be
   deployed to Databricks as an Asset Bundle.
 
-The message format is defined once, in a `.proto` file. Everything else
+The message format is defined once, in `.proto` files. Everything else
 (the Python classes, the conversion to Elasticsearch documents, the
 Elasticsearch mapping, the schema Spark decodes with) follows from it; see
 [The message schema](#the-message-schema).
@@ -122,14 +125,19 @@ component that restarts stays paused.
 
 A data view called **Vehicle telemetry** is created automatically.
 
+Fields are named by their VSS path, e.g. `Vehicle.Speed`.
+
 - **Discover** (menu → Analytics → Discover): see the raw messages. Try the
-  queries `events : "HARSH_BRAKING"`, `engine_temp_c > 100` or
-  `check_engine_light : true`.
+  queries `events : "HARSH_BRAKING"`,
+  `Vehicle.Powertrain.CombustionEngine.EngineCoolant.Temperature > 100` or
+  `Vehicle.Diagnostics.DTCCount > 0`.
 - **Maps** (menu → Analytics → Maps): add a *Documents* layer on the
-  *Vehicle telemetry* data view to watch the vehicles move around Stockholm.
-  Style it by `vehicle_id` and turn on auto-refresh.
-- **Dashboards**: build charts of e.g. average `speed_kmh` or maximum
-  `engine_temp_c` per `vehicle_id` over time.
+  *Vehicle telemetry* data view, with the geo field
+  `Vehicle.CurrentLocation.GeoPoint`, to watch the vehicles move around
+  Stockholm. Style it by `vehicle_id` and turn on auto-refresh.
+- **Dashboards**: build charts of e.g. average `Vehicle.Speed` or maximum
+  `Vehicle.Powertrain.CombustionEngine.EngineCoolant.Temperature` per
+  `vehicle_id` over time.
 
 ### Processing the protobuf files with dbt
 
@@ -212,32 +220,49 @@ The producer uses `vehicle_id` as the message **key**. Kafka hashes the key
 to choose a partition, so all messages from one vehicle go to the same
 partition and keep their order.
 
-The value is a `vehicle.v1.VehicleTelemetry` protobuf message, and a
-`message-type` header names that type. As a document in Elasticsearch, a
-message looks like this:
+The value is a `vehicle.v2.VehicleTelemetry` protobuf message, and a
+`message-type` header names that type. It's an envelope: who sent the
+reading and when, the events the vehicle detected, and the readings
+themselves in `Vehicle`, a tree of
+[VSS](https://covesa.github.io/vehicle_signal_specification/) signals. As a
+document in Elasticsearch, a message looks like this:
 
 ```json
 {
-  "message_id": "c00e4bbc-e4b7-41c2-a3cf-d432c3a5b0a6",
-  "vehicle_id": "vehicle-003",
-  "vin": "HUNWXCA4JH9S4SYEX",
-  "vehicle_type": "BUS",
-  "timestamp": "2026-09-29T08:02:54.428502Z",
-  "position": { "lat": 59.351242, "lon": 18.090492 },
-  "heading_deg": 357.2,
-  "speed_kmh": 47.0,
-  "rpm": 1109,
-  "gear": 3,
-  "engine_temp_c": 111.6,
-  "fuel_level_pct": 54.02,
-  "battery_voltage": 14.07,
-  "odometer_km": 186607.526,
-  "tire_pressure_kpa": { "front_left": 230.4, "front_right": 227.9, "rear_left": 226.0, "rear_right": 213.8 },
-  "check_engine_light": true,
-  "dtc_codes": ["P0217"],
+  "message_id": "6b2e25f1-46bd-4469-9da1-176885f5c0c3",
+  "vehicle_id": "vehicle-001",
+  "timestamp": "2026-10-14T12:33:54.524220Z",
+  "Vehicle": {
+    "VehicleIdentification": { "VIN": "E42JTRY3DA4R2AR0H", "BodyType": "car" },
+    "Speed": 47.0,
+    "TraveledDistance": 225879305,
+    "Acceleration": { "Longitudinal": 0.14 },
+    "CurrentLocation": {
+      "Latitude": 59.351746, "Longitude": 18.062717, "Heading": 326.9,
+      "GeoPoint": { "lat": 59.351746, "lon": 18.062717 }
+    },
+    "Powertrain": {
+      "CombustionEngine": { "Speed": 1792.0, "EngineCoolant": { "Temperature": 117.8 } },
+      "Transmission": { "CurrentGear": 3 },
+      "FuelSystem": { "RelativeLevel": 54, "IsFuelLevelLow": false }
+    },
+    "LowVoltageBattery": { "CurrentVoltage": 14.07 },
+    "Chassis": { "Axle": {
+      "Row1": { "Wheel": { "Left":  { "Tire": { "Pressure": 238, "IsPressureLow": false } },
+                           "Right": { "Tire": { "Pressure": 212, "IsPressureLow": false } } } },
+      "Row2": { "Wheel": { "Left":  { "Tire": { "Pressure": 228, "IsPressureLow": false } },
+                           "Right": { "Tire": { "Pressure": 214, "IsPressureLow": false } } } }
+    } },
+    "Diagnostics": { "DTCCount": 1, "DTCList": ["P0217"] }
+  },
   "events": ["ENGINE_OVERHEATING"]
 }
 ```
+
+VSS also fixes each signal's data type and unit: `Speed` is a float in km/h,
+`TraveledDistance` (the odometer) an integer in meters, `RelativeLevel` a
+whole percent, tire `Pressure` whole kPa. `Row1` is the front axle.
+`GeoPoint` isn't a VSS signal: it's added for the Kibana map (see below).
 
 Some simulated vehicles have a faulty cooling system or a leaking tire, so
 over time you will see events like `ENGINE_OVERHEATING`, `LOW_TIRE_PRESSURE`,
@@ -245,13 +270,24 @@ over time you will see events like `ENGINE_OVERHEATING`, `LOW_TIRE_PRESSURE`,
 
 ## The message schema
 
-[`schema/proto/vehicle/v1/vehicle_telemetry.proto`](schema/proto/vehicle/v1/vehicle_telemetry.proto)
-defines the message. `schema/generate.py` turns it into everything the
-services need, in `schema/generated/`:
+Two files define the message:
+
+- [`schema/proto/vehicle/v2/vehicle_telemetry.proto`](schema/proto/vehicle/v2/vehicle_telemetry.proto):
+  the envelope (`message_id`, `vehicle_id`, `timestamp`, `events`) and the
+  `Vehicle` field.
+- [`schema/proto/vss/v6/vss.proto`](schema/proto/vss/v6/vss.proto): the
+  part of VSS 6.1 our vehicles send. It's laid out the way COVESA's
+  [vss-tools](https://github.com/COVESA/vss-tools) exports VSS to protobuf:
+  one message per branch (`Vehicle.CurrentLocation` → `VehicleCurrentLocation`),
+  one field per signal, named as in VSS. The comments give each signal's
+  unit.
+
+`schema/generate.py` turns them into everything the services need, in
+`schema/generated/`:
 
 | Output                                  | Made by                       | Used by                              |
 |-----------------------------------------|-------------------------------|--------------------------------------|
-| `vehicle/v1/vehicle_telemetry_pb2.py`   | `protoc` (via `grpcio-tools`) | all services, to (de)serialize       |
+| `vehicle/v2/vehicle_telemetry_pb2.py`, `vss/v6/vss_pb2.py` | `protoc` (via `grpcio-tools`) | all services, to (de)serialize |
 | `kafka/v1/kafka_record_pb2.py`          | `protoc`                      | protobuf-consumer, file format       |
 | `descriptors/descriptor_set.desc`       | `protoc`                      | Spark's `from_protobuf`, to decode   |
 | `elasticsearch/index_template.json`     | `telemetry_schema/elk.py`     | `elk-setup`, to create the mapping   |
@@ -264,8 +300,11 @@ in the generated code:
 - **Elasticsearch**: protobuf's own [`json_format`](https://googleapis.dev/python/protobuf/latest/google/protobuf/json_format.html)
   turns a message into a JSON document. The index mapping comes from
   `telemetry_schema/elk.py`. It maps each protobuf type to an Elasticsearch
-  type and honors a custom field option for special cases:
-  `Position position = 6 [(elk.field_type) = "geo_point"];`.
+  type and honors custom field options for special cases
+  ([`elk/options.proto`](schema/proto/elk/options.proto)):
+  `(elk.field_type)` picks another Elasticsearch type, and `(elk.geo_point)`
+  adds the `GeoPoint` field that Kibana's map needs, built from VSS's
+  `Latitude` and `Longitude`.
 - **Spark**: the protobuf consumer doesn't decode anything. It stores the
   Kafka records as they are, and Spark decodes them with its built-in
   [`from_protobuf`](https://spark.apache.org/docs/latest/sql-data-sources-protobuf.html)
@@ -299,7 +338,7 @@ record's bytes. See `dbt/src/protobuf_macros/telemetry_source.sql`, or try it in
 Spark SQL shell (`docker compose run --rm spark-sql`):
 
 ```sql
-select from_protobuf(record.value, 'vehicle.v1.VehicleTelemetry', '/data/protobuf/vehicle_telemetry/_schema/descriptor_set.desc',
+select from_protobuf(record.value, 'vehicle.v2.VehicleTelemetry', '/data/protobuf/vehicle_telemetry/_schema/descriptor_set.desc',
                      map('emit.default.values', 'true')) as message
 from (
   select explode(from_protobuf(content, 'kafka.v1.KafkaRecordBatch', '/data/protobuf/vehicle_telemetry/_schema/descriptor_set.desc').records) as record
@@ -310,17 +349,17 @@ limit 5;
 
 ### Validating the messages
 
-Types alone don't say much: any `double` is a valid speed. The `.proto` file
-therefore also contains validation rules, written as
+Types alone don't say much: any `float` is a valid speed. The `.proto` files
+therefore also contain validation rules, written as
 [protovalidate](https://protovalidate.com) annotations, the open-source
-standard for this:
+standard for this. They check the ranges VSS defines (a latitude is -90 to
+90, a uint8 is at most 255) and some stricter "fleet rules" for implausible
+values:
 
 ```proto
-double speed_kmh = 8 [
-  (buf.validate.field).double.gte = 0,
-  (buf.validate.field).double.lte = 250
-];
-repeated string dtc_codes = 17 [(buf.validate.field).repeated.items.string.pattern = "^[PCBU][0-9]{4}$"];
+// Vehicle speed. Unit: km/h. VSS type: float. Fleet rule: at most 250.
+float Speed = 2 [(buf.validate.field).float = {gte: 0, lte: 250}];
+repeated string DTCList = 2 [(buf.validate.field).repeated.items.string.pattern = "^[PCBU][0-9]{4}$"];
 ```
 
 (`schema/proto/buf/validate/validate.proto` is protovalidate's definition of
@@ -332,14 +371,15 @@ these options, copied from its repository.)
 archived Kafka records, before any model is built, and check that every
 message:
 
-- **decodes** as a `vehicle.v1.VehicleTelemetry`;
+- **decodes** as a `vehicle.v2.VehicleTelemetry`;
 - only uses **enum values defined in the schema** (protobuf accepts unknown
   enum numbers on the wire);
 - follows the **protovalidate rules**: required fields, number ranges,
   string lengths and patterns, repeated items, timestamps not in the future.
 
-There is one test per field, named after it, e.g.
-`protobuf_valid__vehicle_telemetry__speed_kmh`. When one fails, `dbt build`
+There is one test per field that has rules, including every VSS signal in
+`Vehicle`, named after its path, e.g.
+`protobuf_valid__vehicle_telemetry__Vehicle_Speed`. When one fails, `dbt build`
 skips the models that depend on the source, so invalid data never reaches
 them. Run only the source tests with
 `docker compose run --rm dbt test --select source:raw`.
@@ -355,7 +395,18 @@ leaking tire's pressure went below 0 after about an hour, and a heading of
 
 ### Changing the schema
 
-1. Edit the `.proto` file, e.g. add `double ambient_temp_c = 19;`.
+1. Edit the `.proto` file. To send another VSS signal, look it up in the
+   [VSS documentation](https://covesa.github.io/vehicle_signal_specification/)
+   and add it with its VSS name, type and the branch messages it needs. For
+   `Vehicle.Exterior.AirTemperature` (a float, in Celsius), add to `vss.proto`:
+   ```proto
+   // Vehicle.Exterior: information about the vehicle's surroundings.
+   message VehicleExterior {
+     // Air temperature outside the vehicle. Unit: Celsius. VSS type: float.
+     float AirTemperature = 1;
+   }
+   ```
+   and `VehicleExterior Exterior = 10;` to `message Vehicle`.
 2. Set the new field in `producer/producer.py`.
 3. Rebuild and restart: `docker compose up -d --build`. Each image runs
    `schema/generate.py` while it is built.
@@ -458,11 +509,12 @@ The converters have unit tests: `pip install pytest && python -m pytest schema/t
    ```
 6. **Evolve the schema.** Follow [Changing the schema](#changing-the-schema) to add a
    field, then find it in Kibana, Kafka UI and Spark
-   (`docker compose run --rm dbt show --inline "select ambient_temp_c, count(*) from {{ telemetry_source() }} group by 1"`).
+   (`docker compose run --rm dbt show --inline "select Vehicle.Exterior.AirTemperature, count(*) from {{ telemetry_source() }} group by 1"`).
    What happens if you change the type of an existing field instead?
 7. **Send invalid messages.** `python producer/send_invalid.py` publishes a few
    messages that break the schema in different ways (garbage bytes, an unknown
-   enum value, a speed of 999, bad patterns, missing required fields). Wait a
+   enum value, a speed of 999, bad patterns, a body type that isn't allowed,
+   missing required fields). Wait a
    minute for the protobuf consumer to write them to a file, then run
    `make solution`: the source tests fail, one per kind
    of problem, and the models are skipped. To start clean again, run
@@ -477,3 +529,7 @@ The converters have unit tests: `pip install pytest && python -m pytest schema/t
   configuration in production.
 - If Elasticsearch fails to start on Linux with a `vm.max_map_count` error, run
   `sudo sysctl -w vm.max_map_count=262144`.
+- Up to version 2.0 the messages were `vehicle.v1.VehicleTelemetry`, with
+  flat fields like `speed_kmh`. The VSS-based `vehicle.v2` can't decode them,
+  so after upgrading run `make clean` before `make up` to start without the
+  old data.

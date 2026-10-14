@@ -53,8 +53,10 @@ generic tests from `src/protobuf_macros/protobuf_tests.sql`:
 - `protobuf_decodes`: fails for bytes that aren't a valid message of the
   given type (`from_protobuf` in PERMISSIVE mode returns NULL for them).
 - `protobuf_field_valid`: fails for messages where the generated SQL
-  condition for a field isn't true. The failing rows show the Kafka
-  coordinates and the invalid value.
+  condition for a field isn't true. Each VSS signal in the nested `Vehicle`
+  message gets its own test, named after its path
+  (`protobuf_valid__vehicle_telemetry__Vehicle_Speed`). The failing rows show
+  the Kafka coordinates and the invalid value.
 
 Because the models depend on the source, `dbt build` runs these tests first
 and skips the models when one fails. The staging model also skips messages
@@ -83,9 +85,11 @@ dbt on your machine, regenerate it yourself after a schema change:
 - Reading the files is the only part that differs between local Spark and
   Databricks, so that macro (`raw_protobuf_files()`) is *dispatched*: dbt
   picks the Spark or the Databricks implementation depending on the adapter.
-- When you add a field to the `.proto` file, it is available in
+- When you add a field to the `.proto` files, it is available in
   `telemetry_source()` right away; add it to the staging model to use it
-  downstream.
+  downstream. The readings are in one struct column, `Vehicle`, that follows
+  the VSS tree, so a signal is read by its VSS path, e.g.
+  `Vehicle.Powertrain.FuelSystem.RelativeLevel`.
 
 ## Running locally with Spark
 

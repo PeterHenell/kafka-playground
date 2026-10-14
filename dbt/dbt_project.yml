@@ -32,7 +32,7 @@ vars:
   # The compiled schema the consumer writes next to the files.
   descriptor_path: "{{ env_var('RAW_DATA_PATH', '../data/protobuf/vehicle_telemetry') }}/_schema/descriptor_set.desc"
   # The protobuf message type to decode.
-  message_type: vehicle.v1.VehicleTelemetry
+  message_type: vehicle.v2.VehicleTelemetry
 
 # Views over the raw protobuf files, used as dbt sources (see
 # src/protobuf_macros/raw_protobuf_views.sql and src/sources/).

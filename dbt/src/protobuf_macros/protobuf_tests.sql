@@ -31,13 +31,14 @@ where decoded is null
   Spark SQL expression over the decoded message `m`. Default values (0, "",
   false) are not emitted, so an unset or zero field is NULL; the generated
   conditions account for that. Messages that don't decode are left to
-  protobuf_decodes.
+  protobuf_decodes. `field` is the path of the checked field, e.g.
+  Vehicle.CurrentLocation.Latitude; its value is shown as invalid_value.
 -#}
 {% test protobuf_field_valid(model, column_name, message_type, field, condition, message_type_column='message_type') %}
 
 select
     * except (m, {{ column_name }}),
-    string(m.`{{ field }}`) as invalid_value
+    string(m.`{{ field.split('.') | join('`.`') }}`) as invalid_value
 from (
     select
         *,

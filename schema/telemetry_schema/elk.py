@@ -1,7 +1,8 @@
 """Protobuf -> Elasticsearch.
 
 - to_document() turns a message into a JSON-ready dict, using protobuf's
-  own json_format module.
+  own json_format module, and adds the geo_point fields asked for with the
+  (elk.geo_point) option.
 - index_properties() builds the Elasticsearch mapping for a message type
   from its descriptor. generate.py uses it to write the index template.
 """
@@ -46,11 +47,33 @@ def to_document(message: Message) -> dict:
     Fields that have their default value (0, "", false, empty list) are
     included too, so every document has the same fields.
     """
-    return json_format.MessageToDict(
+    document = json_format.MessageToDict(
         message,
         preserving_proto_field_name=True,
         always_print_fields_with_no_presence=True,
     )
+    add_geo_points(message.DESCRIPTOR, document)
+    return document
+
+
+def add_geo_points(descriptor: Descriptor, document: dict) -> None:
+    """Adds {"lat": .., "lon": ..} values for fields with the (elk.geo_point) option."""
+    load_generated_modules()
+    from elk import options_pb2
+
+    for field in descriptor.fields:
+        if field.type != FieldDescriptor.TYPE_MESSAGE or field.is_repeated or field.name not in document:
+            continue
+        value = document[field.name]
+        options = field.GetOptions()
+        if options.HasExtension(options_pb2.geo_point):
+            geo = options.Extensions[options_pb2.geo_point]
+            # A missing coordinate (an `optional` field that isn't set) is 0,
+            # like in protobuf.
+            value[geo.name] = {"lat": value.get(geo.lat, 0), "lon": value.get(geo.lon, 0)}
+        # Well-known types like Timestamp are strings in the document.
+        if field.message_type.full_name not in WELL_KNOWN_TYPES:
+            add_geo_points(field.message_type, value)
 
 
 def index_properties(descriptor: Descriptor) -> dict:
@@ -60,7 +83,8 @@ def index_properties(descriptor: Descriptor) -> dict:
 
     properties = {}
     for field in descriptor.fields:
-        override = field.GetOptions().Extensions[options_pb2.field_type]
+        options = field.GetOptions()
+        override = options.Extensions[options_pb2.field_type]
         if override:
             properties[field.name] = {"type": override}
         elif field.type == FieldDescriptor.TYPE_MESSAGE:
@@ -71,6 +95,9 @@ def index_properties(descriptor: Descriptor) -> dict:
                 properties[field.name] = {"type": "flattened"}
             else:
                 properties[field.name] = {"properties": index_properties(message_type)}
+                if options.HasExtension(options_pb2.geo_point):
+                    name = options.Extensions[options_pb2.geo_point].name
+                    properties[field.name]["properties"][name] = {"type": "geo_point"}
         else:
             # Repeated fields need no special mapping: every Elasticsearch
             # field can hold a list of values.

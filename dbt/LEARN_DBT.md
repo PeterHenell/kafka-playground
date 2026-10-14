@@ -6,9 +6,11 @@ snapshot. It takes about two hours. It's written for data engineers who know
 Databricks but haven't used dbt.
 
 The data: simulated vehicles send telemetry (position, speed, engine
-temperature, tire pressure, events like `harsh_braking`) through Kafka. A
-consumer archives the raw Kafka records as binary protobuf files. Your dbt
-project turns those files into tables.
+temperature, tire pressure, events like `harsh_braking`) through Kafka. The
+readings follow the [COVESA Vehicle Signal Specification](https://covesa.github.io/vehicle_signal_specification/)
+(VSS), a standard way to name vehicle data. A consumer archives the raw Kafka
+records as binary protobuf files. Your dbt project turns those files into
+tables.
 
 **How the lab works.** Each step introduces one dbt concept, then you use it.
 Every step has the same parts:
@@ -106,9 +108,9 @@ make dbt
 The end of the output looks like this:
 
 ```
-Finished running 3 project hooks, 20 data tests in 0 hours 0 minutes and 9.0 seconds (9.0s).
+Finished running 3 project hooks, 27 data tests in 0 hours 0 minutes and 9.5 seconds (9.5s).
 Completed successfully
-Done. PASS=23 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=23
+Done. PASS=30 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=30
 ```
 
 There are no models yet, but dbt already ran some *hooks* and *tests*. You'll
@@ -185,8 +187,10 @@ It declares a source `raw` with two tables, both views over the protobuf files:
 | `vehicle_telemetry_records` | Kafka record: topic, partition, offset, timestamp, and the message, still serialized, in `value` |
 
 Most of the file is **tests** on the source: every message must decode, and
-follow the rules in the `.proto` file. Those are the 20 tests you saw in step 0.
-Step 11 is about tests.
+follow the rules in the `.proto` files. Most tests check one vehicle signal,
+e.g. `protobuf_valid__vehicle_telemetry__Vehicle_Speed` checks that
+`Vehicle.Speed` is between 0 and 250. Those are the 27 tests you saw in
+step 0. Step 11 is about tests.
 
 **Do:** look at the raw Kafka records:
 
@@ -231,10 +235,31 @@ Look at the data:
 make dbt ARGS="show --select stg_vehicle_telemetry"
 ```
 
-The columns come from the protobuf message. Some are nested: `position` is
-a struct of `lat` and `lon` (printed as `[59.33…, 18.02…]`), and
-`tire_pressure_kpa` has one value per tire. Enums are upper case (`BUS`).
-`dbt show` only prints the columns that fit; `…` marks the rest.
+The columns come from the protobuf message: `message_id`, `vehicle_id`,
+`timestamp`, `Vehicle`, `events` and the Kafka coordinates. Enums are upper
+case (`HARSH_BRAKING`). `dbt show` only prints the columns that fit; `…`
+marks the rest.
+
+All the readings are in one column, `Vehicle`: a struct of structs that
+follows the VSS tree. VSS names every signal by its path from the root, with
+a fixed data type and unit, e.g.
+
+| VSS signal                                              | Unit    |
+|---------------------------------------------------------|---------|
+| `Vehicle.Speed`                                         | km/h    |
+| `Vehicle.CurrentLocation.Latitude`                      | degrees |
+| `Vehicle.Powertrain.FuelSystem.RelativeLevel`           | percent |
+| `Vehicle.Chassis.Axle.Row1.Wheel.Left.Tire.Pressure`    | kPa     |
+| `Vehicle.TraveledDistance`                              | m       |
+
+In Spark SQL you read a signal with the same path:
+
+```bash
+make dbt ARGS="show --inline \"select vehicle_id, Vehicle.Speed, Vehicle.Powertrain.FuelSystem.RelativeLevel from {{ ref('stg_vehicle_telemetry') }}\""
+```
+
+The full list of signals, with their units, is in
+[`../schema/proto/vss/v6/vss.proto`](../schema/proto/vss/v6/vss.proto).
 
 ### 4.2 Clean it up
 
@@ -242,16 +267,22 @@ a struct of `lat` and `lon` (printed as `[59.33…, 18.02…]`), and
 before you run it:
 
 ```sql
--- One row per telemetry reading, with nested fields flattened into columns.
+-- One row per telemetry reading, with the VSS signals flattened into columns.
 --
 -- telemetry_source() decodes the binary protobuf files written by the
 -- protobuf consumer (see dbt/src/protobuf_macros/telemetry_source.sql).
 --
+-- The readings arrive in the `Vehicle` struct, a tree that follows the COVESA
+-- Vehicle Signal Specification (VSS): Vehicle.Speed,
+-- Vehicle.Powertrain.FuelSystem.RelativeLevel, and so on. This model maps
+-- each signal we use to a column, with the unit in its name, and converts
+-- the units we want differently (the odometer is in meters in VSS).
+--
 -- The consumers deliver messages at-least-once, so the same message can end
 -- up in the files more than once. We keep one row per message_id.
 --
--- Protobuf enums arrive as their names (CAR, HARSH_BRAKING); they are
--- lower-cased here. New fields added to the .proto file are available in
+-- Protobuf enums arrive as their names (HARSH_BRAKING); they are lower-cased
+-- here. New signals added to the .proto files are available in
 -- telemetry_source() automatically; add them below to use them in the models.
 
 with source as (
@@ -265,29 +296,33 @@ deduplicated as (
     select
         message_id,
         vehicle_id,
-        vin,
-        lower(vehicle_type) as vehicle_type,
         {{ adapter.quote('timestamp') }} as recorded_at,
         to_date({{ adapter.quote('timestamp') }}) as event_date,
 
-        source.position.lat as latitude,
-        source.position.lon as longitude,
-        heading_deg,
-        speed_kmh,
-        rpm,
-        gear,
-        engine_temp_c,
-        fuel_level_pct,
-        battery_voltage,
-        odometer_km,
+        Vehicle.VehicleIdentification.VIN as vin,
+        Vehicle.VehicleIdentification.BodyType as vehicle_type,
 
-        source.tire_pressure_kpa.front_left as tire_front_left_kpa,
-        source.tire_pressure_kpa.front_right as tire_front_right_kpa,
-        source.tire_pressure_kpa.rear_left as tire_rear_left_kpa,
-        source.tire_pressure_kpa.rear_right as tire_rear_right_kpa,
+        Vehicle.CurrentLocation.Latitude as latitude,
+        Vehicle.CurrentLocation.Longitude as longitude,
+        Vehicle.CurrentLocation.Heading as heading_deg,
+        Vehicle.Speed as speed_kmh,
+        Vehicle.Acceleration.Longitudinal as acceleration_mps2,
+        Vehicle.Powertrain.CombustionEngine.Speed as rpm,
+        Vehicle.Powertrain.Transmission.CurrentGear as gear,
+        Vehicle.Powertrain.CombustionEngine.EngineCoolant.Temperature as engine_temp_c,
+        Vehicle.Powertrain.FuelSystem.RelativeLevel as fuel_level_pct,
+        Vehicle.LowVoltageBattery.CurrentVoltage as battery_voltage,
+        Vehicle.TraveledDistance / 1000 as odometer_km,
 
-        check_engine_light,
-        dtc_codes,
+        -- VSS numbers the axles from the front: Row1 is the front axle.
+        Vehicle.Chassis.Axle.Row1.Wheel.Left.Tire.Pressure as tire_front_left_kpa,
+        Vehicle.Chassis.Axle.Row1.Wheel.Right.Tire.Pressure as tire_front_right_kpa,
+        Vehicle.Chassis.Axle.Row2.Wheel.Left.Tire.Pressure as tire_rear_left_kpa,
+        Vehicle.Chassis.Axle.Row2.Wheel.Right.Tire.Pressure as tire_rear_right_kpa,
+
+        -- An active trouble code lights the check engine light.
+        Vehicle.Diagnostics.DTCCount > 0 as check_engine_light,
+        Vehicle.Diagnostics.DTCList as dtc_codes,
         transform(events, e -> lower(e)) as events,
 
         kafka_partition,
@@ -328,9 +363,21 @@ Note the style: one CTE per step (`source` → `deduplicated` →
 long models readable. `{{ adapter.quote('timestamp') }}` quotes a column
 name that's also a SQL keyword.
 
+This is what a staging model is for: the standard VSS paths go in, and the
+names the rest of your project uses come out. The marts never see
+`Vehicle.Powertrain.CombustionEngine.EngineCoolant.Temperature`, only
+`engine_temp_c`. If the source changes (a new VSS version renames a signal),
+you change this one model. Two signals need more than a new name:
+
+- `Vehicle.TraveledDistance` is in meters, so it's divided by 1000 for
+  `odometer_km`.
+- VSS has no check engine light, only the active trouble codes
+  (`Vehicle.Diagnostics.DTCCount`), so `check_engine_light` is derived from
+  them.
+
 **Check:** run it and look at the result again, as in 4.1. The timestamp is
-called `recorded_at` now, there's an `event_date`, and the vehicle types are
-lower case (`car`).
+called `recorded_at` now, there's an `event_date`, and every signal has its
+own column, e.g. `speed_kmh`, `fuel_level_pct` and `tire_rear_left_kpa`.
 
 **Solution:** [stg_vehicle_telemetry.sql](../dbt_solution/src/models/staging/stg_vehicle_telemetry.sql)
 
@@ -815,7 +862,7 @@ make dbt
 ```
 
 ends with `Completed successfully`: no `ERROR` and no `FAIL`. Your own tests
-are listed among the 20 source tests.
+are listed among the 27 source tests.
 
 Now make a test fail. In `_staging.yml`, remove `"bus"` from the accepted
 values of `vehicle_type`, and run `make dbt` again. The test fails
@@ -1120,3 +1167,6 @@ make dab-run        # run dbt build on Databricks
   and the `low_fuel_pct` variable along with them.
 - `make solution` builds the finished project into `vehicle_telemetry_solution`
   if you want to show the end result first.
+- Someone with an older checkout (from before the messages followed VSS) still
+  has `vehicle.v1` messages in Kafka and in `./data`. Their source tests fail
+  on `known_message_type`. `make clean && make up` starts over with VSS data.

@@ -1,13 +1,19 @@
--- One row per telemetry reading, with nested fields flattened into columns.
+-- One row per telemetry reading, with the VSS signals flattened into columns.
 --
 -- telemetry_source() decodes the binary protobuf files written by the
 -- protobuf consumer (see dbt/src/protobuf_macros/telemetry_source.sql).
 --
+-- The readings arrive in the `Vehicle` struct, a tree that follows the COVESA
+-- Vehicle Signal Specification (VSS): Vehicle.Speed,
+-- Vehicle.Powertrain.FuelSystem.RelativeLevel, and so on. This model maps
+-- each signal we use to a column, with the unit in its name, and converts
+-- the units we want differently (the odometer is in meters in VSS).
+--
 -- The consumers deliver messages at-least-once, so the same message can end
 -- up in the files more than once. We keep one row per message_id.
 --
--- Protobuf enums arrive as their names (CAR, HARSH_BRAKING); they are
--- lower-cased here. New fields added to the .proto file are available in
+-- Protobuf enums arrive as their names (HARSH_BRAKING); they are lower-cased
+-- here. New signals added to the .proto files are available in
 -- telemetry_source() automatically; add them below to use them in the models.
 
 with source as (
@@ -21,29 +27,33 @@ deduplicated as (
     select
         message_id,
         vehicle_id,
-        vin,
-        lower(vehicle_type) as vehicle_type,
         {{ adapter.quote('timestamp') }} as recorded_at,
         to_date({{ adapter.quote('timestamp') }}) as event_date,
 
-        source.position.lat as latitude,
-        source.position.lon as longitude,
-        heading_deg,
-        speed_kmh,
-        rpm,
-        gear,
-        engine_temp_c,
-        fuel_level_pct,
-        battery_voltage,
-        odometer_km,
+        Vehicle.VehicleIdentification.VIN as vin,
+        Vehicle.VehicleIdentification.BodyType as vehicle_type,
 
-        source.tire_pressure_kpa.front_left as tire_front_left_kpa,
-        source.tire_pressure_kpa.front_right as tire_front_right_kpa,
-        source.tire_pressure_kpa.rear_left as tire_rear_left_kpa,
-        source.tire_pressure_kpa.rear_right as tire_rear_right_kpa,
+        Vehicle.CurrentLocation.Latitude as latitude,
+        Vehicle.CurrentLocation.Longitude as longitude,
+        Vehicle.CurrentLocation.Heading as heading_deg,
+        Vehicle.Speed as speed_kmh,
+        Vehicle.Acceleration.Longitudinal as acceleration_mps2,
+        Vehicle.Powertrain.CombustionEngine.Speed as rpm,
+        Vehicle.Powertrain.Transmission.CurrentGear as gear,
+        Vehicle.Powertrain.CombustionEngine.EngineCoolant.Temperature as engine_temp_c,
+        Vehicle.Powertrain.FuelSystem.RelativeLevel as fuel_level_pct,
+        Vehicle.LowVoltageBattery.CurrentVoltage as battery_voltage,
+        Vehicle.TraveledDistance / 1000 as odometer_km,
 
-        check_engine_light,
-        dtc_codes,
+        -- VSS numbers the axles from the front: Row1 is the front axle.
+        Vehicle.Chassis.Axle.Row1.Wheel.Left.Tire.Pressure as tire_front_left_kpa,
+        Vehicle.Chassis.Axle.Row1.Wheel.Right.Tire.Pressure as tire_front_right_kpa,
+        Vehicle.Chassis.Axle.Row2.Wheel.Left.Tire.Pressure as tire_rear_left_kpa,
+        Vehicle.Chassis.Axle.Row2.Wheel.Right.Tire.Pressure as tire_rear_right_kpa,
+
+        -- An active trouble code lights the check engine light.
+        Vehicle.Diagnostics.DTCCount > 0 as check_engine_light,
+        Vehicle.Diagnostics.DTCList as dtc_codes,
         transform(events, e -> lower(e)) as events,
 
         kafka_partition,

@@ -22,7 +22,7 @@ Configuration (environment variables):
     KAFKA_GROUP_ID           default: elk-writer
     LOGSTASH_URL             default: http://localhost:8081
     BATCH_SIZE               default: 100
-    MESSAGE_TYPE             default: vehicle.v1.VehicleTelemetry (used when a
+    MESSAGE_TYPE             default: vehicle.v2.VehicleTelemetry (used when a
                              message has no message-type header)
     CONTROL_NAME             default: consumer (its name in the control panel)
 
@@ -51,7 +51,7 @@ TOPIC = os.getenv("KAFKA_TOPIC", "vehicle-telemetry")
 GROUP_ID = os.getenv("KAFKA_GROUP_ID", "elk-writer")
 LOGSTASH_URL = os.getenv("LOGSTASH_URL", "http://localhost:8081")
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "100"))
-MESSAGE_TYPE = os.getenv("MESSAGE_TYPE", "vehicle.v1.VehicleTelemetry")
+MESSAGE_TYPE = os.getenv("MESSAGE_TYPE", "vehicle.v2.VehicleTelemetry")
 CONTROL_NAME = os.getenv("CONTROL_NAME", "consumer")
 
 

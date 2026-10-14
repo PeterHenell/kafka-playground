@@ -3,7 +3,7 @@
 Importing a generated *_pb2 module registers its messages in protobuf's
 default descriptor pool. We import all of them, so a consumer can look up a
 message type by the name it gets from a Kafka header, e.g.
-"vehicle.v1.VehicleTelemetry".
+"vehicle.v2.VehicleTelemetry".
 """
 
 import importlib
@@ -32,7 +32,7 @@ def load_generated_modules() -> None:
 
 
 def message_class(full_name: str) -> type:
-    """Returns the generated class for a message, e.g. message_class("vehicle.v1.VehicleTelemetry")."""
+    """Returns the generated class for a message, e.g. message_class("vehicle.v2.VehicleTelemetry")."""
     load_generated_modules()
     descriptor = descriptor_pool.Default().FindMessageTypeByName(full_name)
     return message_factory.GetMessageClass(descriptor)
