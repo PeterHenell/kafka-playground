@@ -2,7 +2,8 @@
 
 1. Installs the index template that schema/generate.py generated from the
    .proto files, so new daily indices get the right field types (e.g.
-   `position` as a geo_point, so it can be shown on a map).
+   `Vehicle.CurrentLocation.GeoPoint` as a geo_point, so it can be shown on
+   a map).
 2. Adds new fields to the mapping of existing indices, so a schema change
    takes effect today instead of tomorrow. (Changing the type of an existing
    field isn't possible in Elasticsearch; that only applies to new indices.)

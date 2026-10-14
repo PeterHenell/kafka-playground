@@ -9,4 +9,4 @@ kafka:
         - name: ProtobufFile
           properties:
             protobufFilesDir: /protofiles
-            protobufMessageName: vehicle.v1.VehicleTelemetry
+            protobufMessageName: vehicle.v2.VehicleTelemetry

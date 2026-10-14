@@ -1,0 +1,178 @@
+// The vehicle signals, as defined by the COVESA Vehicle Signal Specification
+// (VSS) 6.1: https://covesa.github.io/vehicle_signal_specification/
+//
+// VSS is an open standard that names vehicle data as a tree of signals, e.g.
+// Vehicle.Speed or Vehicle.Powertrain.FuelSystem.RelativeLevel, each with a
+// data type and a unit. Everyone who uses VSS means the same thing by the same
+// path, so data from different car makers and tools fits together.
+//
+// This file is the part of the tree our vehicles send. It is written the way
+// COVESA's vss-tools exports VSS to protobuf:
+//   - each branch is a message named by its path without the dots
+//     (Vehicle.CurrentLocation -> VehicleCurrentLocation),
+//   - each signal is a field named exactly as in VSS (Latitude, Speed),
+//   - VSS data types map to the closest protobuf type: uint8 and uint16
+//     become uint32, int8 becomes int32, string[] becomes repeated string.
+// One difference: VSS "instances" (Axle Row1/Row2, Wheel Left/Right) share
+// one message type here, instead of one copy per instance.
+//
+// The unit of each signal is in its comment. VSS defines it; the field name
+// doesn't say it, so check here (or in the VSS docs) before doing math.
+//
+// The [(buf.validate.field)...] rules check the VSS ranges (Latitude -90..90)
+// and the limits of the VSS data type (uint8 is at most 255). Some are
+// stricter than VSS, to catch implausible values from our fleet (a speed of
+// 999 km/h); those say "fleet rule". schema/generate.py turns them into dbt
+// tests.
+//
+// Schema changes follow the same rules as in vehicle/v2/vehicle_telemetry.proto.
+// To send another VSS signal, look it up in the VSS docs, add the field with
+// its VSS name and a new number, and add the branch messages it needs.
+syntax = "proto3";
+
+package vss.v6;
+
+import "buf/validate/validate.proto";
+import "elk/options.proto";
+
+// Vehicle: high-level vehicle data.
+message Vehicle {
+  VehicleVehicleIdentification VehicleIdentification = 1;
+  // Vehicle speed. Unit: km/h. VSS type: float. Fleet rule: at most 250.
+  float Speed = 2 [(buf.validate.field).float = {gte: 0, lte: 250}];
+  // Odometer reading, total distance traveled during the lifetime of the
+  // vehicle. Unit: m (meters, not km). VSS type: uint32.
+  uint32 TraveledDistance = 3;
+  VehicleAcceleration Acceleration = 4;
+  VehicleCurrentLocation CurrentLocation = 5 [
+    // Kibana needs a geo_point to show the location on a map. This adds one
+    // to the Elasticsearch documents, at Vehicle.CurrentLocation.GeoPoint.
+    (elk.geo_point) = {name: "GeoPoint", lat: "Latitude", lon: "Longitude"},
+    (buf.validate.field).required = true
+  ];
+  VehiclePowertrain Powertrain = 6;
+  VehicleLowVoltageBattery LowVoltageBattery = 7;
+  VehicleChassis Chassis = 8;
+  VehicleDiagnostics Diagnostics = 9;
+}
+
+// Vehicle.VehicleIdentification: attributes that identify a vehicle.
+message VehicleVehicleIdentification {
+  // 17-character Vehicle Identification Number (VIN) as defined by ISO 3779.
+  string VIN = 1 [(buf.validate.field).string.len = 17];
+  // The design and body style of the vehicle. VSS type: string, with no list
+  // of allowed values. Fleet rule: one of our four kinds of vehicle.
+  string BodyType = 2 [(buf.validate.field).string = {
+    in: ["car", "van", "truck", "bus"]
+  }];
+}
+
+// Vehicle.Acceleration: spatial acceleration.
+message VehicleAcceleration {
+  // Vehicle acceleration in X (longitudinal acceleration): positive when
+  // speeding up, negative when braking. Unit: m/s^2. VSS type: float.
+  // Fleet rule: within +-20 m/s^2 (about 2 g).
+  float Longitudinal = 1 [(buf.validate.field).float = {gte: -20, lte: 20}];
+}
+
+// Vehicle.CurrentLocation: the current location of the vehicle in WGS 84
+// coordinates.
+message VehicleCurrentLocation {
+  // Current latitude of the vehicle. Unit: degrees. VSS type: double.
+  double Latitude = 1 [(buf.validate.field).double = {gte: -90, lte: 90}];
+  // Current longitude of the vehicle. Unit: degrees. VSS type: double.
+  double Longitude = 2 [(buf.validate.field).double = {gte: -180, lte: 180}];
+  // Current heading relative to geographic north. 0 = North, 90 = East,
+  // 180 = South, 270 = West. Unit: degrees. VSS type: double.
+  double Heading = 3 [(buf.validate.field).double = {gte: 0, lte: 360}];
+}
+
+// Vehicle.Powertrain: the engine, transmission and fuel system.
+message VehiclePowertrain {
+  VehiclePowertrainCombustionEngine CombustionEngine = 1;
+  VehiclePowertrainTransmission Transmission = 2;
+  VehiclePowertrainFuelSystem FuelSystem = 3;
+}
+
+// Vehicle.Powertrain.CombustionEngine: the engine.
+message VehiclePowertrainCombustionEngine {
+  // Engine speed measured as rotations per minute. Unit: rpm. VSS type:
+  // float. Fleet rule: at most 10000.
+  float Speed = 1 [(buf.validate.field).float = {gte: 0, lte: 10000}];
+  VehiclePowertrainCombustionEngineEngineCoolant EngineCoolant = 2;
+}
+
+// Vehicle.Powertrain.CombustionEngine.EngineCoolant: the engine coolant.
+message VehiclePowertrainCombustionEngineEngineCoolant {
+  // Engine coolant temperature. Unit: Celsius. VSS type: float.
+  // Fleet rule: -40 to 150.
+  float Temperature = 1 [(buf.validate.field).float = {gte: -40, lte: 150}];
+}
+
+// Vehicle.Powertrain.Transmission: the gearbox.
+message VehiclePowertrainTransmission {
+  // The current gear. 0 = Neutral, 1/2/.. = Forward, -1/-2/.. = Reverse.
+  // VSS type: int8. Fleet rule: one reverse gear, at most 8 forward gears.
+  int32 CurrentGear = 1 [(buf.validate.field).int32 = {gte: -1, lte: 8}];
+}
+
+// Vehicle.Powertrain.FuelSystem: the fuel tank.
+message VehiclePowertrainFuelSystem {
+  // Level in fuel tank as percent of capacity. 0 = empty. 100 = full.
+  // Unit: percent. VSS type: uint8, min 0, max 100.
+  uint32 RelativeLevel = 1 [(buf.validate.field).uint32.lte = 100];
+  // Indicates that the fuel level is low (e.g. <50km range).
+  bool IsFuelLevelLow = 2;
+}
+
+// Vehicle.LowVoltageBattery: the 12 V battery.
+message VehicleLowVoltageBattery {
+  // Current voltage of the low voltage battery. Unit: V. VSS type: float.
+  // Fleet rule: 0 to 30.
+  float CurrentVoltage = 1 [(buf.validate.field).float = {gte: 0, lte: 30}];
+}
+
+// Vehicle.Chassis: axles, wheels and tires.
+message VehicleChassis {
+  VehicleChassisAxle Axle = 1;
+}
+
+// Vehicle.Chassis.Axle, with its VSS instances Row1 (front) and Row2 (rear).
+message VehicleChassisAxle {
+  VehicleChassisAxleRow Row1 = 1;
+  VehicleChassisAxleRow Row2 = 2;
+}
+
+// Vehicle.Chassis.Axle.Row1 and .Row2: one axle.
+message VehicleChassisAxleRow {
+  VehicleChassisAxleRowWheel Wheel = 1;
+}
+
+// Vehicle.Chassis.Axle.RowN.Wheel, with its VSS instances Left and Right.
+message VehicleChassisAxleRowWheel {
+  VehicleChassisAxleRowWheelSide Left = 1;
+  VehicleChassisAxleRowWheelSide Right = 2;
+}
+
+// Vehicle.Chassis.Axle.RowN.Wheel.Left and .Right: one wheel.
+message VehicleChassisAxleRowWheelSide {
+  VehicleChassisAxleRowWheelTire Tire = 1;
+}
+
+// Vehicle.Chassis.Axle.RowN.Wheel.Left/Right.Tire: one tire.
+message VehicleChassisAxleRowWheelTire {
+  // Tire pressure in kilo-Pascal. Unit: kPa. VSS type: uint16.
+  // Fleet rule: at most 500.
+  uint32 Pressure = 1 [(buf.validate.field).uint32.lte = 500];
+  // Tire pressure status. True = low tire pressure. False = good tire pressure.
+  bool IsPressureLow = 2;
+}
+
+// Vehicle.Diagnostics: diagnostic trouble codes (DTCs).
+message VehicleDiagnostics {
+  // Number of Diagnostic Trouble Codes (DTC). VSS type: uint8.
+  uint32 DTCCount = 1 [(buf.validate.field).uint32.lte = 255];
+  // List of currently active DTCs, formatted according to OBD II
+  // (SAE-J2012DA_201812), e.g. "P0217". VSS type: string[].
+  repeated string DTCList = 2 [(buf.validate.field).repeated.items.string.pattern = "^[PCBU][0-9]{4}$"];
+}

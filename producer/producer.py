@@ -4,9 +4,14 @@ Each vehicle drives around (roughly) Stockholm, and every tick it sends one
 message with its position, speed, engine temperature and so on.
 
 Messages are serialized with Protocol Buffers, using the VehicleTelemetry
-message defined in schema/proto/vehicle/v1/vehicle_telemetry.proto. Each
-message carries a `message-type` header with the protobuf type name, so
-consumers know how to decode it.
+message defined in schema/proto/vehicle/v2/vehicle_telemetry.proto. The
+readings are in its `Vehicle` field, named and typed as in the COVESA Vehicle
+Signal Specification (VSS, schema/proto/vss/v6/vss.proto): the speed is
+Vehicle.Speed, the fuel level Vehicle.Powertrain.FuelSystem.RelativeLevel.
+VSS also fixes the units, so the odometer is sent in meters and the fuel
+level and tire pressures as whole numbers. Each message carries a
+`message-type` header with the protobuf type name, so consumers know how to
+decode it.
 
 Messages are keyed by vehicle_id. Kafka hashes the key to pick a partition, so
 all messages from the same vehicle land in the same partition and are read in
@@ -43,7 +48,8 @@ from kafka_control import ControlState  # noqa: E402
 from telemetry_schema.registry import load_generated_modules  # noqa: E402
 
 load_generated_modules()
-from vehicle.v1 import vehicle_telemetry_pb2 as pb  # noqa: E402
+from vehicle.v2 import vehicle_telemetry_pb2 as pb  # noqa: E402
+from vss.v6 import vss_pb2 as vss  # noqa: E402
 
 BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9094")
 TOPIC = os.getenv("KAFKA_TOPIC", "vehicle-telemetry")
@@ -54,7 +60,8 @@ CONTROL_NAME = os.getenv("CONTROL_NAME", "producer")
 
 # Vehicles start somewhere around central Stockholm.
 START_LAT, START_LON = 59.3293, 18.0686
-VEHICLE_TYPES = [pb.CAR, pb.VAN, pb.TRUCK, pb.BUS]
+# Vehicle.VehicleIdentification.BodyType (see vss.proto for the allowed values).
+BODY_TYPES = ["car", "van", "truck", "bus"]
 EARTH_RADIUS_M = 6_371_000
 
 
@@ -68,8 +75,8 @@ class Vehicle:
         # the same vehicle every time the producer starts.
         fixed = random.Random(index)
         self.vin = "".join(fixed.choices("ABCDEFGHJKLMNPRSTUVWXYZ0123456789", k=17))
-        self.vehicle_type = fixed.choice(VEHICLE_TYPES)
-        self.max_speed = 90 if self.vehicle_type in (pb.TRUCK, pb.BUS) else 130
+        self.body_type = fixed.choice(BODY_TYPES)
+        self.max_speed = 90 if self.body_type in ("truck", "bus") else 130
 
         self.lat = START_LAT + random.uniform(-0.05, 0.05)
         self.lon = START_LON + random.uniform(-0.08, 0.08)
@@ -80,10 +87,11 @@ class Vehicle:
         self.fuel_level = random.uniform(40, 100)
         self.odometer = fixed.uniform(5_000, 250_000)
         self.battery_voltage = 12.6
-        self.tire_pressure = {t: random.uniform(220, 240) for t in ("front_left", "front_right", "rear_left", "rear_right")}
+        # VSS numbers the axles from the front: Row1 is the front axle.
+        self.tire_pressure = {t: random.uniform(220, 240) for t in (("Row1", "Left"), ("Row1", "Right"), ("Row2", "Left"), ("Row2", "Right"))}
         # Some vehicles have a slow leak or a bad cooling system, so there is
         # something interesting to find in Kibana.
-        self.leaking_tire = fixed.choice([None, None, None, "rear_left"])
+        self.leaking_tire = fixed.choice([None, None, None, ("Row2", "Left")])
         self.cooling_problem = fixed.random() < 0.2
 
     def tick(self, dt: float) -> pb.VehicleTelemetry:
@@ -148,25 +156,50 @@ class Vehicle:
         message = pb.VehicleTelemetry(
             message_id=str(uuid.uuid4()),
             vehicle_id=self.vehicle_id,
-            vin=self.vin,
-            vehicle_type=self.vehicle_type,
-            position=pb.Position(lat=round(self.lat, 6), lon=round(self.lon, 6)),
-            # % 360 again: 359.96 would round up to 360.0, which is not a valid heading.
-            heading_deg=round(self.heading, 1) % 360,
-            speed_kmh=round(self.speed, 1),
-            rpm=round(rpm),
-            gear=gear,
-            engine_temp_c=round(self.engine_temp, 1),
-            fuel_level_pct=round(self.fuel_level, 2),
-            battery_voltage=round(self.battery_voltage, 2),
-            odometer_km=round(self.odometer, 3),
-            tire_pressure_kpa=pb.TirePressure(**{t: round(p, 1) for t, p in self.tire_pressure.items()}),
-            check_engine_light=bool(dtc_codes),
-            dtc_codes=dtc_codes,
             events=events,
+            Vehicle=vss.Vehicle(
+                VehicleIdentification=vss.VehicleVehicleIdentification(VIN=self.vin, BodyType=self.body_type),
+                Speed=round(self.speed, 1),
+                TraveledDistance=round(self.odometer * 1000),  # VSS: meters
+                Acceleration=vss.VehicleAcceleration(Longitudinal=round(acceleration, 2)),
+                CurrentLocation=vss.VehicleCurrentLocation(
+                    Latitude=round(self.lat, 6),
+                    Longitude=round(self.lon, 6),
+                    # % 360 again: 359.96 would round up to 360.0, which is the same as 0.
+                    Heading=round(self.heading, 1) % 360,
+                ),
+                Powertrain=vss.VehiclePowertrain(
+                    CombustionEngine=vss.VehiclePowertrainCombustionEngine(
+                        Speed=round(rpm),
+                        EngineCoolant=vss.VehiclePowertrainCombustionEngineEngineCoolant(Temperature=round(self.engine_temp, 1)),
+                    ),
+                    Transmission=vss.VehiclePowertrainTransmission(CurrentGear=gear),
+                    FuelSystem=vss.VehiclePowertrainFuelSystem(
+                        RelativeLevel=round(self.fuel_level),  # VSS: whole percent
+                        IsFuelLevelLow=self.fuel_level < 10,
+                    ),
+                ),
+                LowVoltageBattery=vss.VehicleLowVoltageBattery(CurrentVoltage=round(self.battery_voltage, 2)),
+                Chassis=vss.VehicleChassis(Axle=self.axle()),
+                Diagnostics=vss.VehicleDiagnostics(DTCCount=len(dtc_codes), DTCList=dtc_codes),
+            ),
         )
         message.timestamp.GetCurrentTime()
         return message
+
+    def axle(self) -> vss.VehicleChassisAxle:
+        """Vehicle.Chassis.Axle: the tire pressures, in whole kPa as in VSS."""
+
+        def wheel(row: str, side: str) -> vss.VehicleChassisAxleRowWheelSide:
+            pressure = self.tire_pressure[(row, side)]
+            return vss.VehicleChassisAxleRowWheelSide(
+                Tire=vss.VehicleChassisAxleRowWheelTire(Pressure=round(pressure), IsPressureLow=pressure < 180)
+            )
+
+        def row(name: str) -> vss.VehicleChassisAxleRow:
+            return vss.VehicleChassisAxleRow(Wheel=vss.VehicleChassisAxleRowWheel(Left=wheel(name, "Left"), Right=wheel(name, "Right")))
+
+        return vss.VehicleChassisAxle(Row1=row("Row1"), Row2=row("Row2"))
 
 
 def ensure_topic(admin: AdminClient) -> None:

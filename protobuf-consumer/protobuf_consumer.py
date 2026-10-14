@@ -33,7 +33,7 @@ Configuration (environment variables):
     OUTPUT_DIR               default: ./data/protobuf/vehicle_telemetry
     FLUSH_MAX_MESSAGES       default: 5000
     FLUSH_INTERVAL_SECONDS   default: 60
-    MESSAGE_TYPE             default: vehicle.v1.VehicleTelemetry (used when a
+    MESSAGE_TYPE             default: vehicle.v2.VehicleTelemetry (used when a
                              message has no message-type header)
     CONTROL_NAME             default: protobuf-consumer (its name in the control panel)
 
@@ -68,7 +68,7 @@ GROUP_ID = os.getenv("KAFKA_GROUP_ID", "protobuf-writer")
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "./data/protobuf/vehicle_telemetry"))
 FLUSH_MAX_MESSAGES = int(os.getenv("FLUSH_MAX_MESSAGES", "5000"))
 FLUSH_INTERVAL_SECONDS = float(os.getenv("FLUSH_INTERVAL_SECONDS", "60"))
-MESSAGE_TYPE = os.getenv("MESSAGE_TYPE", "vehicle.v1.VehicleTelemetry")
+MESSAGE_TYPE = os.getenv("MESSAGE_TYPE", "vehicle.v2.VehicleTelemetry")
 CONTROL_NAME = os.getenv("CONTROL_NAME", "protobuf-consumer")
 
 

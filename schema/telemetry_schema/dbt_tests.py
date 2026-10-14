@@ -8,9 +8,11 @@ consumer, with tests that check every message against the schema:
   accepts unknown enum numbers on the wire; Spark decodes them as
   UNKNOWN_ENUM_VALUE_<Enum>_<number>.
 - The protovalidate rules in the .proto file (buf.validate.field options),
-  translated to Spark SQL conditions. For each top-level field, all rules of
-  the field and of the messages nested in it become one
-  protobuf_field_valid test.
+  translated to Spark SQL conditions. Each field gets one
+  protobuf_field_valid test with all its rules. Fields of nested messages
+  (like the VSS tree under Vehicle) get their own test too, named by their
+  path (Vehicle.CurrentLocation.Latitude), so a failing test points at one
+  signal.
 
 Rules that can't be expressed in SQL here (CEL expressions, some well-known
 string formats, ...) are listed under `meta.unchecked_rules` in the output,
@@ -285,6 +287,41 @@ class RuleTranslator:
             checks.unchecked.append(f"{path}: CEL expressions")
 
 
+def is_branch(field: FieldDescriptor) -> bool:
+    """A single nested message of our own, like a VSS branch (not a Timestamp or a map)."""
+    return (
+        field.type == F.TYPE_MESSAGE
+        and not field.is_repeated
+        and not field.message_type.full_name.startswith("google.protobuf.")
+    )
+
+
+def field_checks(translator: RuleTranslator, field: FieldDescriptor, expr: str, path: str, guard: str | None = None):
+    """Yields (path, Checks) for a field and, for a nested message, for each field in it.
+
+    The fields of a nested message are only checked when the message is set
+    (`guard`); whether it must be set is the parent's `required` rule. Spark
+    returns NULL for a.b.c when a is NULL, so one guard per level is enough.
+    """
+    if not is_branch(field):
+        checks = Checks()
+        checks.extend(translator.field(field, expr, path), guard)
+        yield path, checks
+        return
+    rules = translator.rules(field)
+    if rules.ignore == translator.pv.IGNORE_ALWAYS:
+        return
+    own = Checks()
+    translator._unsupported_common(rules, path, own)
+    if rules.required:
+        own.add(f"{expr} is not null", f"{path} is required")
+    checks = Checks()
+    checks.extend(own, guard)
+    yield path, checks
+    for sub in field.message_type.fields:
+        yield from field_checks(translator, sub, f"{expr}.`{sub.name}`", f"{path}.{sub.name}", guard=f"{expr} is null")
+
+
 def snake(name: str) -> str:
     return "".join(f"_{c.lower()}" if c.isupper() and i else c.lower() for i, c in enumerate(name))
 
@@ -304,24 +341,24 @@ def source_yaml(message: Descriptor, record: Descriptor, table: str, generated_f
     options = message.GetOptions()
     if options.HasExtension(translator.pv.message):
         unchecked.append(f"{message.name}: message rules (CEL/oneof)")
-    for field in message.fields:
-        checks = translator.field(field, f"m.`{field.name}`", field.name)
-        unchecked.extend(checks.unchecked)
-        if not checks.conditions:
-            continue
-        value_tests.append(
-            {
-                "protobuf_field_valid": {
-                    "name": f"protobuf_valid__{table}__{field.name}",
-                    "arguments": {
-                        "message_type": message.full_name,
-                        "field": field.name,
-                        "condition": "\nand ".join(f"({c})" for c in checks.conditions) + "\n",
-                    },
-                    "config": {"meta": {"rules": checks.descriptions}},
+    for top_level_field in message.fields:
+        for path, checks in field_checks(translator, top_level_field, f"m.`{top_level_field.name}`", top_level_field.name):
+            unchecked.extend(checks.unchecked)
+            if not checks.conditions:
+                continue
+            value_tests.append(
+                {
+                    "protobuf_field_valid": {
+                        "name": f"protobuf_valid__{table}__{path.replace('.', '_')}",
+                        "arguments": {
+                            "message_type": message.full_name,
+                            "field": path,
+                            "condition": "\nand ".join(f"({c})" for c in checks.conditions) + "\n",
+                        },
+                        "config": {"meta": {"rules": checks.descriptions}},
+                    }
                 }
-            }
-        )
+            )
 
     columns = [{"name": "file_path", "description": "The file the record was read from."}]
     for field in record.fields:
