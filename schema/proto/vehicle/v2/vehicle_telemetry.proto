@@ -8,8 +8,8 @@
 //
 // This file is the single source of truth for the message format. After
 // changing it, regenerate the code (python schema/generate.py, or rebuild the
-// containers with docker compose up -d --build) and the producer, both
-// consumers and the Elasticsearch mapping pick up the new schema.
+// containers with docker compose up -d --build) and the producer, the
+// protobuf consumer and the dbt source tests pick up the new schema.
 //
 // Rules for changing it without breaking old messages still in Kafka:
 //   - Add new fields with new field numbers.
@@ -43,7 +43,7 @@ message VehicleTelemetry {
     (buf.validate.field).timestamp.lt_now = true
   ];
   // The vehicle signals, in the VSS tree. Named like the VSS root branch, so
-  // the paths in Elasticsearch and Spark are the VSS paths (Vehicle.Speed).
+  // the paths in Spark are the VSS paths (Vehicle.Speed).
   vss.v6.Vehicle Vehicle = 4 [(buf.validate.field).required = true];
   // Events the vehicle's telematics unit detected since the previous
   // reading. Not part of VSS: VSS has signals (values), not events.

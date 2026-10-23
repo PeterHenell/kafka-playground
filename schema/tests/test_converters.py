@@ -1,4 +1,4 @@
-"""Tests for the schema-driven converters.
+"""Tests for the generated code and the descriptor set.
 
     python schema/generate.py
     python -m pytest schema/tests
@@ -10,7 +10,7 @@ from pathlib import Path
 from google.protobuf import descriptor_pb2
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from telemetry_schema import elk, message_class  # noqa: E402
+from telemetry_schema import message_class  # noqa: E402
 from telemetry_schema.registry import DESCRIPTOR_SET  # noqa: E402
 
 VehicleTelemetry = message_class("vehicle.v2.VehicleTelemetry")
@@ -29,41 +29,6 @@ def sample() -> VehicleTelemetry:
     )
     message.timestamp.FromJsonString("2026-09-29T08:00:00.123Z")
     return message
-
-
-def test_elk_document_uses_field_names_enum_names_and_defaults():
-    document = elk.to_document(sample())
-    assert document["Vehicle"]["VehicleIdentification"]["BodyType"] == "truck"
-    assert document["Vehicle"]["Speed"] == 42.5
-    assert document["events"] == ["HARSH_BRAKING", "SPEEDING"]
-    assert document["timestamp"] == "2026-09-29T08:00:00.123Z"
-    # Fields with default values are included, so all documents look alike.
-    assert document["Vehicle"]["TraveledDistance"] == 0
-    # Unset nested messages (VSS branches) are left out.
-    assert "Powertrain" not in document["Vehicle"]
-
-
-def test_elk_document_adds_geo_point_from_option():
-    location = elk.to_document(sample())["Vehicle"]["CurrentLocation"]
-    assert location["GeoPoint"] == {"lat": 59.33, "lon": 18.07}
-    # The VSS signals are still there.
-    assert location["Heading"] == 90
-
-
-def test_elk_mapping_follows_types_and_custom_options():
-    properties = elk.index_properties(VehicleTelemetry.DESCRIPTOR)
-    vehicle = properties["Vehicle"]["properties"]
-    location = vehicle["CurrentLocation"]["properties"]
-    assert location["GeoPoint"] == {"type": "geo_point"}  # (elk.geo_point) option
-    assert location["Latitude"] == {"type": "double"}
-    assert properties["timestamp"] == {"type": "date"}  # google.protobuf.Timestamp
-    assert properties["events"] == {"type": "keyword"}  # enum
-    assert vehicle["Speed"] == {"type": "float"}
-    assert vehicle["TraveledDistance"] == {"type": "long"}  # uint32
-    tire = vehicle["Chassis"]["properties"]["Axle"]["properties"]["Row2"]["properties"]["Wheel"]["properties"]["Left"]["properties"]["Tire"]
-    assert tire["properties"]["Pressure"] == {"type": "long"}
-    # Every field in the message is mapped.
-    assert set(properties) == {f.name for f in VehicleTelemetry.DESCRIPTOR.fields}
 
 
 def test_record_batch_round_trips_message_bytes():

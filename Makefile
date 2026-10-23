@@ -28,7 +28,7 @@ DAB_FLAGS = -t $(DAB_TARGET) $(if $(CATALOG),--var catalog=$(CATALOG)) $(if $(WA
 help: ## List the targets
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  make %-13s %s\n", $$1, $$2}'
 
-up: ## Build and start everything (Kafka, ELK, consumers, control panel, Superset)
+up: ## Build and start everything (Kafka, producer, consumer, control panel, Superset)
 	$(COMPOSE) up -d $(UP_FLAGS)
 	@echo
 	@echo "Control panel (links to all other tools): http://localhost:8090"
@@ -41,8 +41,8 @@ restart: down up ## Stop and start everything again
 ps: ## Show the status of the services
 	$(COMPOSE) ps
 
-logs: ## Follow the logs of the producer and consumers (Ctrl+C to stop)
-	$(COMPOSE) logs -f producer consumer protobuf-consumer
+logs: ## Follow the logs of the producer and the consumer (Ctrl+C to stop)
+	$(COMPOSE) logs -f producer protobuf-consumer
 
 dbt: ## Run dbt on your lab project (dbt/): `dbt build`, or make dbt ARGS="..."
 	$(COMPOSE) run --rm dbt $(ARGS)
@@ -62,7 +62,7 @@ panel: ## Show where the control panel runs
 invalid: ## Publish a few invalid messages, to see the dbt source tests fail
 	$(COMPOSE) run --rm --no-deps producer python -u producer/send_invalid.py
 
-clean: ## Stop everything and delete ALL data: Kafka, Elasticsearch, Superset, ./data
+clean: ## Stop everything and delete ALL data: Kafka, Superset, ./data
 	$(COMPOSE) --profile dbt down -v --remove-orphans
 	@# ./data is written by the containers (as root), so delete it from a container too.
 	$(ENGINE) run --rm -v "$(CURDIR):/work" docker.io/library/postgres:16-alpine rm -rf /work/data

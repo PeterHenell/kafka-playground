@@ -65,7 +65,7 @@ that don't decode, so `dbt run` (which doesn't run tests) still works.
 The Docker image runs the generator while it's built and copies the result
 into the project before every dbt command (`docker-entrypoint.sh`). Running
 dbt on your machine, regenerate it yourself after a schema change:
-`python schema/generate.py` (in the producer/consumers' virtual environment).
+`python schema/generate.py` (in the producer and consumer's virtual environment).
 
 ### Decoding the messages
 
@@ -136,7 +136,7 @@ By default Spark would keep the catalog in an embedded Derby database, which
 only one process can open at a time.
 
 Or run dbt on your machine, from this folder. That needs Java 17 or 21, and a
-separate virtual environment from the producer and consumers, because dbt
+separate virtual environment from the producer and the consumer, because dbt
 and the protobuf tools need different versions of the protobuf library.
 Without `SPARK_CONF_DIR`, Spark uses its defaults there: tables in
 `./spark-warehouse` and the Derby catalog in `./metastore_db`, so one Spark

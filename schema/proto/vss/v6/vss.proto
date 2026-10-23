@@ -33,7 +33,6 @@ syntax = "proto3";
 package vss.v6;
 
 import "buf/validate/validate.proto";
-import "elk/options.proto";
 
 // Vehicle: high-level vehicle data.
 message Vehicle {
@@ -44,12 +43,7 @@ message Vehicle {
   // vehicle. Unit: m (meters, not km). VSS type: uint32.
   uint32 TraveledDistance = 3;
   VehicleAcceleration Acceleration = 4;
-  VehicleCurrentLocation CurrentLocation = 5 [
-    // Kibana needs a geo_point to show the location on a map. This adds one
-    // to the Elasticsearch documents, at Vehicle.CurrentLocation.GeoPoint.
-    (elk.geo_point) = {name: "GeoPoint", lat: "Latitude", lon: "Longitude"},
-    (buf.validate.field).required = true
-  ];
+  VehicleCurrentLocation CurrentLocation = 5 [(buf.validate.field).required = true];
   VehiclePowertrain Powertrain = 6;
   VehicleLowVoltageBattery LowVoltageBattery = 7;
   VehicleChassis Chassis = 8;

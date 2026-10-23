@@ -1,18 +1,15 @@
 # Kafka learning playground
 #
-#   producer (python) --> Kafka --+--> consumer (python) ---------> Logstash --> Elasticsearch --> Kibana
-#                                 +--> protobuf-consumer (python) --> ./data/protobuf --> dbt + Spark
+#   producer (python) --> Kafka --> protobuf-consumer (python) --> ./data/protobuf --> dbt + Spark --> Superset
 #
 # Messages are protobuf, defined in schema/proto. The Python images generate
 # their protobuf code while being built, so after changing a .proto file run:
 #   docker compose up -d --build
 #
 # Start everything:   docker compose up -d --build
-# Kibana:             http://localhost:5601
 # Control panel:      http://localhost:8090
 # Superset:           http://localhost:8088 (admin / admin)
 # Kafka UI:           http://localhost:8080
-# Elasticsearch:      http://localhost:9200
 # Kafka (from host):  localhost:9094
 
 name: kafka-playground
@@ -67,7 +64,7 @@ services:
       kafka:
         condition: service_healthy
 
-  # Pause/resume the producer and consumers, and see produced / consumed /
+  # Pause/resume the producer and the consumer, and see produced / consumed /
   # not consumed messages per consumer group.
   control-panel:
     build:
@@ -83,78 +80,6 @@ services:
       kafka:
         condition: service_healthy
     restart: unless-stopped
-
-  # ------------------------------------------------------------ ELK stack ---
-  elasticsearch:
-    image: elasticsearch:8.17.0
-    container_name: elasticsearch
-    ports:
-      - "9200:9200"
-    environment:
-      discovery.type: single-node
-      # Security is disabled to keep the playground simple. Never do this in production.
-      xpack.security.enabled: "false"
-      ES_JAVA_OPTS: -Xms512m -Xmx512m
-      # By default Elasticsearch stops allocating shards when the disk is 90%
-      # full, which happens easily on a laptop. Ignore disk usage here.
-      cluster.routing.allocation.disk.threshold_enabled: "false"
-    volumes:
-      - es-data:/usr/share/elasticsearch/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fs 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' || exit 1"]
-      interval: 10s
-      timeout: 10s
-      retries: 30
-
-  logstash:
-    image: logstash:8.17.0
-    container_name: logstash
-    ports:
-      - "8081:8081"
-    environment:
-      LS_JAVA_OPTS: -Xms256m -Xmx256m
-    volumes:
-      - ./elk/logstash/pipeline:/usr/share/logstash/pipeline:ro
-      - ./elk/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fs http://localhost:9600/_node/pipelines/main > /dev/null || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-
-  kibana:
-    image: kibana:8.17.0
-    container_name: kibana
-    ports:
-      - "5601:5601"
-    environment:
-      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fs http://localhost:5601/api/status | grep -q '\"level\":\"available\"' || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-
-  # One-shot job: installs the Elasticsearch index template generated from
-  # the .proto files (so e.g. `Vehicle.CurrentLocation.GeoPoint` is a
-  # geo_point and can be shown on a map) and creates a Kibana data view.
-  elk-setup:
-    build:
-      context: .
-      dockerfile: elk/setup/Dockerfile
-    container_name: elk-setup
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-      kibana:
-        condition: service_healthy
-    restart: "no"
 
   # ------------------------------------------------------- Python clients ---
   producer:
@@ -172,27 +97,8 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  consumer:
-    build:
-      context: .
-      dockerfile: consumer/Dockerfile
-    container_name: consumer
-    environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      KAFKA_TOPIC: vehicle-telemetry
-      KAFKA_GROUP_ID: elk-writer
-      LOGSTASH_URL: http://logstash:8081
-    depends_on:
-      kafka:
-        condition: service_healthy
-      logstash:
-        condition: service_healthy
-      elk-setup:
-        condition: service_completed_successfully
-    restart: unless-stopped
-
-  # Second consumer group: archives the same stream as binary protobuf files
-  # in ./data/protobuf, for the dbt project (Spark) to decode and process.
+  # Consumer group protobuf-writer: archives the stream as binary protobuf
+  # files in ./data/protobuf, for the dbt project (Spark) to decode and process.
   protobuf-consumer:
     build:
       context: .
@@ -358,5 +264,4 @@ services:
 
 volumes:
   kafka-data:
-  es-data:
   superset-home:

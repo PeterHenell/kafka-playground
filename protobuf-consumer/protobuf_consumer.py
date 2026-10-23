@@ -1,8 +1,9 @@
 """Reads records from Kafka and archives them as binary protobuf files.
 
-This consumer uses its own consumer group (`protobuf-writer`), separate from
-the ELK consumer (`elk-writer`). Kafka tracks offsets per group, so both
-groups receive every message in the topic, independently of each other.
+This consumer uses its own consumer group (`protobuf-writer`). Kafka tracks
+offsets per consumer group, so another group (e.g. a second copy started with
+KAFKA_GROUP_ID=my-group) receives every message in the topic too,
+independently of this one.
 
 The consumer doesn't decode the messages. Each file is one
 `kafka.v1.KafkaRecordBatch` protobuf message (see

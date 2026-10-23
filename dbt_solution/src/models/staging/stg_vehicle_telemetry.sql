@@ -9,7 +9,7 @@
 -- each signal we use to a column, with the unit in its name, and converts
 -- the units we want differently (the odometer is in meters in VSS).
 --
--- The consumers deliver messages at-least-once, so the same message can end
+-- The consumer delivers messages at-least-once, so the same message can end
 -- up in the files more than once. We keep one row per message_id.
 --
 -- Protobuf enums arrive as their names (HARSH_BRAKING); they are lower-cased
