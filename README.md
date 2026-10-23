@@ -7,35 +7,27 @@ temperature, fuel level, tire pressure...) to Kafka as
 [COVESA Vehicle Signal Specification](https://covesa.github.io/vehicle_signal_specification/)
 (VSS), an open standard for naming vehicle data: the speed is
 `Vehicle.Speed`, the fuel level `Vehicle.Powertrain.FuelSystem.RelativeLevel`.
-Two consumers read the same stream, each in its own consumer group:
 
-- **consumer** stores the messages in an ELK stack (Elasticsearch, Logstash,
-  Kibana), where you can search, chart and map them in near real time.
-- **protobuf-consumer** archives the messages, still in binary protobuf, to
-  files. A dbt project decodes them with Apache Spark and turns them into
-  analytics tables, which you can browse, query and chart in
-  [Apache Superset](https://superset.apache.org/). You build that project
-  yourself in a [hands-on dbt lab](dbt/LEARN_DBT.md); the finished version is
-  in [dbt_solution/](dbt_solution/README.md). The same dbt project can be
-  deployed to Databricks as an Asset Bundle.
+A consumer, **protobuf-consumer** (consumer group `protobuf-writer`), archives
+the messages, still in binary protobuf, to files. A dbt project decodes them
+with Apache Spark and turns them into analytics tables, which you can browse,
+query and chart in [Apache Superset](https://superset.apache.org/). You build
+that project yourself in a [hands-on dbt lab](dbt/LEARN_DBT.md); the finished
+version is in [dbt_solution/](dbt_solution/README.md). The same dbt project
+can be deployed to Databricks as an Asset Bundle.
 
 The message format is defined once, in `.proto` files. Everything else
-(the Python classes, the conversion to Elasticsearch documents, the
-Elasticsearch mapping, the schema Spark decodes with) follows from it; see
+(the Python classes, the schema Spark decodes with, the dbt tests that
+validate the messages) follows from it; see
 [The message schema](#the-message-schema).
 
 ```
-                                                 group elk-writer
-┌──────────┐    ┌─────────────────────────┐    ┌──────────┐    ┌──────────┐    ┌───────────────┐    ┌────────┐
-│ producer │ -> │ Kafka                   │ -> │ consumer │ -> │ Logstash │ -> │ Elasticsearch │ <- │ Kibana │
-│ (python) │    │ topic vehicle-telemetry │    │ (python) │    │ (HTTP)   │    │               │    │        │
-└──────────┘    │ 3 partitions            │    └──────────┘    └──────────┘    └───────────────┘    └────────┘
+                                                 group protobuf-writer
+┌──────────┐    ┌─────────────────────────┐    ┌───────────────────┐    ┌────────────────┐    ┌─────────────────┐    ┌──────────┐
+│ producer │ -> │ Kafka                   │ -> │ protobuf-consumer │ -> │ data/protobuf/ │ -> │ dbt + Spark     │ -> │ Superset │
+│ (python) │    │ topic vehicle-telemetry │    │ (python)          │    │ *.pb           │    │ (or Databricks) │    │          │
+└──────────┘    │ 3 partitions            │    └───────────────────┘    └────────────────┘    └─────────────────┘    └──────────┘
                 └─────────────────────────┘
-                             │                   group protobuf-writer
-                             │                 ┌───────────────────┐    ┌────────────────┐    ┌─────────────────┐
-                             └───────────────> │ protobuf-consumer │ -> │ data/protobuf/ │ -> │ dbt + Spark     │
-                                               │ (python)          │    │ *.pb           │    │ (or Databricks) │
-                                               └───────────────────┘    └────────────────┘    └─────────────────┘
 ```
 
 Everything runs in a single Docker Compose project.
@@ -43,7 +35,7 @@ Everything runs in a single Docker Compose project.
 ## Getting started
 
 Requirements: Docker with Docker Compose, or Podman with `podman compose`,
-and about 5 GB of free memory for the containers.
+and about 3 GB of free memory for the containers.
 
 ```bash
 make up          # or: docker compose up -d --build
@@ -56,7 +48,7 @@ say `docker` (`podman compose run --rm dbt build`, `podman exec kafka ...`).
 `podman machine start` provides it; on Linux, run
 `systemctl --user enable --now podman.socket`.
 
-The first start takes a minute or two while Elasticsearch and Kibana boot.
+The first start takes a minute or two while the images are built.
 Check progress with `make ps` and `make logs`. Then open the control panel at
 http://localhost:8090, which links to all the other tools.
 
@@ -67,13 +59,13 @@ The Makefile has shortcuts for the common tasks (run `make` to list them):
 | `make up`       | Build and start everything                                                |
 | `make down`     | Stop everything; the data is kept                                         |
 | `make ps`       | Show the status of the services                                           |
-| `make logs`     | Follow the logs of the producer and the consumers                         |
+| `make logs`     | Follow the logs of the producer and the consumer                          |
 | `make dbt`      | Run `dbt build` on your lab project (`dbt/`); other commands with `make dbt ARGS="test"` |
 | `make solution` | Run `dbt build` on the finished project (`dbt_solution/`)                 |
 | `make spark`    | Open a Spark SQL shell on the dbt tables                                  |
 | `make superset` | Show where Superset runs and how to log in                                |
 | `make invalid`  | Publish a few invalid messages, to see the dbt source tests fail          |
-| `make clean`    | Stop everything and delete **all** data (Kafka, Elasticsearch, Superset, `./data`) |
+| `make clean`    | Stop everything and delete **all** data (Kafka, Superset, `./data`)        |
 
 | Service       | URL                        | What it is                                      |
 |---------------|----------------------------|-------------------------------------------------|
@@ -81,23 +73,19 @@ The Makefile has shortcuts for the common tasks (run `make` to list them):
 | Superset      | http://localhost:8088      | Table catalog, SQL on Spark, charts (admin / admin) |
 | Spark UI      | http://localhost:4040      | Jobs and queries of the Spark Thrift Server     |
 | Spark Thrift Server | `localhost:10000`    | JDBC/ODBC (HiveServer2) access to the Spark tables |
-| Kibana        | http://localhost:5601      | Explore the stored telemetry                    |
 | Kafka UI      | http://localhost:8080      | Topics, decoded messages, consumer groups       |
-| Elasticsearch | http://localhost:9200      | REST API for the stored data                    |
-| Logstash      | http://localhost:8081      | HTTP input the consumer posts to                |
 | Kafka         | `localhost:9094`           | Bootstrap server for clients on your machine    |
 
 Stop everything with `docker compose down`. Add `-v` to also delete the stored
-Kafka and Elasticsearch data and Superset's own database (charts, dashboards,
-saved queries). The protobuf files, the Spark tables and their
+Kafka data and Superset's own database (charts, dashboards, saved queries). The protobuf files, the Spark tables and their
 catalog (the `metastore-db` Postgres data) are in `./data`; delete that folder
 to start over.
 
 ### The control panel
 
 http://localhost:8090 is the starting point. Its **Tools** section links to
-the other web UIs (Superset, Kibana, Kafka UI, the Spark UI and the
-Elasticsearch API), says what each one is for, and shows whether it's up.
+the other web UIs (Superset, Kafka UI and the Spark UI), says what each one
+is for, and shows whether it's up.
 
 Below that, it shows per component whether it's running, and for the topic
 and each consumer group:
@@ -120,24 +108,6 @@ the compacted `playground-control` topic, and the components follow it
 
 Because the topic is compacted, the state survives restarts: a paused
 component that restarts stays paused.
-
-### Looking at the data in Kibana
-
-A data view called **Vehicle telemetry** is created automatically.
-
-Fields are named by their VSS path, e.g. `Vehicle.Speed`.
-
-- **Discover** (menu → Analytics → Discover): see the raw messages. Try the
-  queries `events : "HARSH_BRAKING"`,
-  `Vehicle.Powertrain.CombustionEngine.EngineCoolant.Temperature > 100` or
-  `Vehicle.Diagnostics.DTCCount > 0`.
-- **Maps** (menu → Analytics → Maps): add a *Documents* layer on the
-  *Vehicle telemetry* data view, with the geo field
-  `Vehicle.CurrentLocation.GeoPoint`, to watch the vehicles move around
-  Stockholm. Style it by `vehicle_id` and turn on auto-refresh.
-- **Dashboards**: build charts of e.g. average `Vehicle.Speed` or maximum
-  `Vehicle.Powertrain.CombustionEngine.EngineCoolant.Temperature` per
-  `vehicle_id` over time.
 
 ### Processing the protobuf files with dbt
 
@@ -197,8 +167,8 @@ own settings, charts and dashboards in the `superset-home` volume.
 |----------------------------------------|-------------------------------------------------------------------|
 | `docker-compose.yml`                   | All services                                                      |
 | `schema/proto/`                        | The protobuf message definitions                                  |
-| `schema/generate.py`                   | Generates code, the Elasticsearch mapping and dbt tests from the .proto files |
-| `schema/telemetry_schema/`             | Shared code: finding message classes, protobuf to Elasticsearch   |
+| `schema/generate.py`                   | Generates code and dbt tests from the .proto files                |
+| `schema/telemetry_schema/`             | Shared code: finding message classes, generating the dbt tests    |
 | `producer/producer.py`                 | Vehicle simulator, publishes to Kafka                             |
 | `producer/send_invalid.py`             | Publishes a few invalid messages, to see the dbt source tests fail |
 | `control-panel/`                       | The control panel: a Flask app (`app.py`) and one HTML page       |
@@ -206,12 +176,9 @@ own settings, charts and dashboards in the `superset-home` volume.
 | `spark/spark-defaults.conf`            | Spark settings shared by dbt, spark-sql and the Thrift Server     |
 | `metastore/init/`                      | Hive metastore schema for the `metastore-db` Postgres              |
 | `common/kafka_control.py`              | Pause/resume through the `playground-control` topic              |
-| `consumer/consumer.py`                 | Reads from Kafka, posts batches to Logstash                       |
 | `protobuf-consumer/protobuf_consumer.py` | Reads from Kafka, writes binary protobuf files to `./data/protobuf` |
 | `dbt/`                                 | The dbt lab (`LEARN_DBT.md`): starter project and Databricks Asset Bundle |
 | `dbt_solution/`                        | The finished dbt project                                          |
-| `elk/logstash/pipeline/*.conf`         | Logstash pipeline: HTTP in, Elasticsearch out                     |
-| `elk/setup/setup.py`                   | Installs the generated index template and the Kibana data view    |
 | `kafka-ui/config.yml`                  | Lets Kafka UI decode the protobuf messages                        |
 
 ### A telemetry message
@@ -224,8 +191,9 @@ The value is a `vehicle.v2.VehicleTelemetry` protobuf message, and a
 `message-type` header names that type. It's an envelope: who sent the
 reading and when, the events the vehicle detected, and the readings
 themselves in `Vehicle`, a tree of
-[VSS](https://covesa.github.io/vehicle_signal_specification/) signals. As a
-document in Elasticsearch, a message looks like this:
+[VSS](https://covesa.github.io/vehicle_signal_specification/) signals. Decoded
+to JSON (as in Kafka UI, which writes `message_id` as `messageId`), a message
+looks like this:
 
 ```json
 {
@@ -238,8 +206,7 @@ document in Elasticsearch, a message looks like this:
     "TraveledDistance": 225879305,
     "Acceleration": { "Longitudinal": 0.14 },
     "CurrentLocation": {
-      "Latitude": 59.351746, "Longitude": 18.062717, "Heading": 326.9,
-      "GeoPoint": { "lat": 59.351746, "lon": 18.062717 }
+      "Latitude": 59.351746, "Longitude": 18.062717, "Heading": 326.9
     },
     "Powertrain": {
       "CombustionEngine": { "Speed": 1792.0, "EngineCoolant": { "Temperature": 117.8 } },
@@ -262,7 +229,6 @@ document in Elasticsearch, a message looks like this:
 VSS also fixes each signal's data type and unit: `Speed` is a float in km/h,
 `TraveledDistance` (the odometer) an integer in meters, `RelativeLevel` a
 whole percent, tire `Pressure` whole kPa. `Row1` is the front axle.
-`GeoPoint` isn't a VSS signal: it's added for the Kibana map (see below).
 
 Some simulated vehicles have a faulty cooling system or a leaking tire, so
 over time you will see events like `ENGINE_OVERHEATING`, `LOW_TIRE_PRESSURE`,
@@ -290,21 +256,12 @@ Two files define the message:
 | `vehicle/v2/vehicle_telemetry_pb2.py`, `vss/v6/vss_pb2.py` | `protoc` (via `grpcio-tools`) | all services, to (de)serialize |
 | `kafka/v1/kafka_record_pb2.py`          | `protoc`                      | protobuf-consumer, file format       |
 | `descriptors/descriptor_set.desc`       | `protoc`                      | Spark's `from_protobuf`, to decode   |
-| `elasticsearch/index_template.json`     | `telemetry_schema/elk.py`     | `elk-setup`, to create the mapping   |
 | `dbt/src/sources/raw_vehicle_telemetry.yml` | `telemetry_schema/dbt_tests.py` | dbt, to validate the archived messages (see [Validating the messages](#validating-the-messages)) |
 
-The conversions at runtime don't use any hand-written, per-field code. They
-walk the protobuf *descriptors*, the schema information that `protoc` embeds
-in the generated code:
+Nothing that reads the messages has hand-written, per-field code. It all
+works from the protobuf *descriptors*, the schema information that `protoc`
+embeds in the generated code:
 
-- **Elasticsearch**: protobuf's own [`json_format`](https://googleapis.dev/python/protobuf/latest/google/protobuf/json_format.html)
-  turns a message into a JSON document. The index mapping comes from
-  `telemetry_schema/elk.py`. It maps each protobuf type to an Elasticsearch
-  type and honors custom field options for special cases
-  ([`elk/options.proto`](schema/proto/elk/options.proto)):
-  `(elk.field_type)` picks another Elasticsearch type, and `(elk.geo_point)`
-  adds the `GeoPoint` field that Kibana's map needs, built from VSS's
-  `Latitude` and `Longitude`.
 - **Spark**: the protobuf consumer doesn't decode anything. It stores the
   Kafka records as they are, and Spark decodes them with its built-in
   [`from_protobuf`](https://spark.apache.org/docs/latest/sql-data-sources-protobuf.html)
@@ -314,9 +271,9 @@ in the generated code:
 - **Kafka UI** decodes the messages with its built-in `ProtobufFile` serde,
   reading the same `.proto` files.
 
-The ELK consumer picks the message class by the `message-type` header, and
-the protobuf consumer stores the header with each record. Neither contains
-any field names.
+The protobuf consumer stores the `message-type` header with each record, and
+the dbt tests are generated from the descriptors, so neither contains any
+field names.
 
 ### The protobuf files
 
@@ -413,8 +370,6 @@ leaking tire's pressure went below 0 after about an hour, and a heading of
 
 The result:
 
-- New Elasticsearch documents contain the field. `elk-setup` updates the
-  index template and adds the field to the mapping of existing indices.
 - The protobuf consumer writes the new descriptor set, so Spark can decode
   the field. It decodes the older files with the new schema too; in messages
   from before the change, the field has its default value (0, "", false).
@@ -435,20 +390,16 @@ there.
 
 - The **producer** uses `acks=all` and `enable.idempotence=true`, so a retried
   send can't create duplicates in Kafka.
-- The **consumer** turns off auto-commit and commits offsets only after
-  Logstash has accepted the batch (*at-least-once*). If it crashes before
-  committing, it reads the same messages again after a restart.
-- **Logstash** uses `message_id` as the Elasticsearch document id, so
-  messages that are delivered twice overwrite the same document instead of
-  creating a duplicate.
-- The **protobuf consumer** also commits only after a file is written. A file
-  can't be "overwritten" like a document, so duplicates are removed later, in
-  the dbt staging model.
+- The **protobuf consumer** turns off auto-commit and commits offsets only
+  after a file is written (*at-least-once*). If it crashes before
+  committing, it reads the same messages again after a restart, so a message
+  can end up in two files. The dbt staging model removes those duplicates by
+  `message_id`.
 
 ## Running the scripts from your machine
 
-The producer and consumer also run in Compose, but you can run extra copies
-on your machine (they connect to `localhost:9094` by default):
+The producer and the consumer also run in Compose, but you can run extra
+copies on your machine (they connect to `localhost:9094` by default):
 
 ```bash
 python -m venv .venv
@@ -457,7 +408,6 @@ pip install -r requirements.txt
 python schema/generate.py          # again after every .proto change
 
 python producer/producer.py
-python consumer/consumer.py
 python protobuf-consumer/protobuf_consumer.py
 TOOLS_CHECK_HOST=localhost python control-panel/app.py   # http://localhost:8090
 ```
@@ -465,31 +415,33 @@ TOOLS_CHECK_HOST=localhost python control-panel/app.py   # http://localhost:8090
 The scripts are configured with environment variables. The docstring at the
 top of each script lists them, for example `NUM_VEHICLES=20 INTERVAL_SECONDS=0.2 python producer/producer.py`.
 
-The converters have unit tests: `pip install pytest && python -m pytest schema/tests`.
+The schema code has unit tests: `pip install pytest && python -m pytest schema/tests`.
 
 ## Things to try
 
 1. **Scale out the consumer group.** Start a second consumer with the same group
-   id: `docker compose up -d --scale consumer=2` (first remove the
-   `container_name: consumer` line), or run `python consumer/consumer.py`
-   on your machine. Watch the `Assigned partitions` lines in the logs as Kafka
-   rebalances the 3 partitions. What happens with 4 consumers?
-2. **Consumer groups.** `elk-writer` and `protobuf-writer` both read every
-   message, independently. Add a third group by running
-   `KAFKA_GROUP_ID=my-group python consumer/consumer.py`. The new group gets
-   its own copy of every message, starting from the beginning of the topic.
-3. **Consumer lag.** Pause the ELK consumer in the [control panel](http://localhost:8090),
-   wait a minute, and watch the lag of the `elk-writer` group grow. It's also
-   in Kafka UI, or on the command line:
+   id: `docker compose up -d --scale protobuf-consumer=2` (first remove the
+   `container_name: protobuf-consumer` line), or run
+   `python protobuf-consumer/protobuf_consumer.py` on your machine. Watch the
+   `Assigned partitions` lines in the logs as Kafka rebalances the 3
+   partitions. What happens with 4 consumers?
+2. **Consumer groups.** Add a second group by running
+   `KAFKA_GROUP_ID=my-group OUTPUT_DIR=./my-group python protobuf-consumer/protobuf_consumer.py`.
+   The new group gets its own copy of every message, starting from the
+   beginning of the topic, while `protobuf-writer` carries on where it was.
+   Both show up in the control panel.
+3. **Consumer lag.** Pause the protobuf consumer in the [control panel](http://localhost:8090),
+   wait a minute, and watch the lag of the `protobuf-writer` group grow. It's
+   also in Kafka UI, or on the command line:
    ```bash
    docker exec kafka /opt/kafka/bin/kafka-consumer-groups.sh \
-     --bootstrap-server localhost:9092 --describe --group elk-writer
+     --bootstrap-server localhost:9092 --describe --group protobuf-writer
    ```
-   Resume it and watch it catch up. Then try stopping the container instead
-   (`docker compose stop consumer`): the group becomes *Empty*, and when it
-   starts again Kafka rebalances. Compare with `protobuf-writer`: its lag
-   grows for up to a minute and then drops to 0, because it only commits after
-   writing a file.
+   Resume it and watch it catch up. Even while it runs, its lag grows for up
+   to a minute and then drops to 0, because it only commits after writing a
+   file. Then try stopping the container instead
+   (`docker compose stop protobuf-consumer`): the group becomes *Empty*, and
+   when it starts again Kafka rebalances.
 4. **Kafka CLI tools.** The broker image comes with the standard tools:
    ```bash
    docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic vehicle-telemetry
@@ -498,17 +450,18 @@ The converters have unit tests: `pip install pytest && python -m pytest schema/t
    ```
    The values are binary protobuf, so they look garbled. That's the price of
    a compact format: you need the schema to read them (as Kafka UI does).
-5. **Replay.** Reset the group's offsets to the beginning (stop the consumer first) and
-   notice that Elasticsearch doesn't get duplicates, because documents are keyed by
-   `message_id`:
+5. **Replay.** Reset the group's offsets to the beginning (stop the consumer
+   first). The consumer archives every message still in Kafka a second time,
+   but the dbt tables don't get duplicates, because the staging model keeps
+   one row per `message_id`:
    ```bash
-   docker compose stop consumer
+   docker compose stop protobuf-consumer
    docker exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
-     --group elk-writer --topic vehicle-telemetry --reset-offsets --to-earliest --execute
-   docker compose start consumer
+     --group protobuf-writer --topic vehicle-telemetry --reset-offsets --to-earliest --execute
+   docker compose start protobuf-consumer
    ```
 6. **Evolve the schema.** Follow [Changing the schema](#changing-the-schema) to add a
-   field, then find it in Kibana, Kafka UI and Spark
+   field, then find it in Kafka UI and Spark
    (`docker compose run --rm dbt show --inline "select Vehicle.Exterior.AirTemperature, count(*) from {{ telemetry_source() }} group by 1"`).
    What happens if you change the type of an existing field instead?
 7. **Send invalid messages.** `python producer/send_invalid.py` publishes a few
@@ -519,16 +472,16 @@ The converters have unit tests: `pip install pytest && python -m pytest schema/t
    `make solution`: the source tests fail, one per kind
    of problem, and the models are skipped. To start clean again, run
    `docker compose down -v` and delete `./data`.
-8. **Break things.** Stop Logstash (`docker compose stop logstash`) and see the
-   consumer retry without committing. Stop Kafka and see what the producer does.
+8. **Break things.** Kill the consumer before it writes a file
+   (`docker compose kill protobuf-consumer`, then `start` it again) and see
+   it read the uncommitted messages again. Stop Kafka and see what the
+   producer does.
 
 ## Notes
 
 - This is a learning setup: Kafka runs as a single node in KRaft mode (no
-  ZooKeeper), and Elasticsearch security is turned off. Don't use this
-  configuration in production.
-- If Elasticsearch fails to start on Linux with a `vm.max_map_count` error, run
-  `sudo sysctl -w vm.max_map_count=262144`.
+  ZooKeeper), with no authentication. Don't use this configuration in
+  production.
 - Up to version 2.0 the messages were `vehicle.v1.VehicleTelemetry`, with
   flat fields like `speed_kmh`. The VSS-based `vehicle.v2` can't decode them,
   so after upgrading run `make clean` before `make up` to start without the

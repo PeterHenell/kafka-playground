@@ -23,7 +23,7 @@ def load_generated_modules() -> None:
     if not GENERATED_DIR.is_dir():
         raise RuntimeError(f"No generated code in {GENERATED_DIR}. Run: python schema/generate.py")
     # The generated modules import each other by their path relative to the
-    # proto root (e.g. `from elk import options_pb2`), so that root must be
+    # proto root (e.g. `from vss.v6 import vss_pb2`), so that root must be
     # on the import path.
     sys.path.insert(0, str(GENERATED_DIR))
     for path in sorted(GENERATED_DIR.rglob("*_pb2.py")):

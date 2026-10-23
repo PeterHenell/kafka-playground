@@ -90,7 +90,7 @@ class Vehicle:
         # VSS numbers the axles from the front: Row1 is the front axle.
         self.tire_pressure = {t: random.uniform(220, 240) for t in (("Row1", "Left"), ("Row1", "Right"), ("Row2", "Left"), ("Row2", "Right"))}
         # Some vehicles have a slow leak or a bad cooling system, so there is
-        # something interesting to find in Kibana.
+        # something interesting to find in the data.
         self.leaking_tire = fixed.choice([None, None, None, ("Row2", "Left")])
         self.cooling_problem = fixed.random() < 0.2
 

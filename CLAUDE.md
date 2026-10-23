@@ -2,27 +2,27 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-A Kafka learning playground: a Python producer simulates vehicles and publishes protobuf telemetry to Kafka, with the readings following COVESA VSS (Vehicle Signal Specification); two consumer groups read the same topic (`vehicle-telemetry`, 3 partitions). `consumer` (group `elk-writer`) posts JSON to Logstash → Elasticsearch → Kibana; `protobuf-consumer` (group `protobuf-writer`) archives the raw records as binary protobuf files in `./data/protobuf`, which a dbt project decodes with Spark. Superset queries the dbt tables through a Spark Thrift Server. Everything runs in one Docker Compose project. README.md is the user-facing guide; dbt/README.md covers dbt, the shared catalog and the Databricks bundle.
+A Kafka learning playground: a Python producer simulates vehicles and publishes protobuf telemetry to Kafka, with the readings following COVESA VSS (Vehicle Signal Specification), to the topic `vehicle-telemetry` (3 partitions). `protobuf-consumer` (group `protobuf-writer`) archives the raw records as binary protobuf files in `./data/protobuf`, which a dbt project decodes with Spark. Superset queries the dbt tables through a Spark Thrift Server. Everything runs in one Docker Compose project. README.md is the user-facing guide; dbt/README.md covers dbt, the shared catalog and the Databricks bundle.
 
 The dbt part is a **hands-on lab**: `dbt/` is the starter project (its `src/models/` and `src/macros/` are deliberately empty) and `dbt/LEARN_DBT.md` is the two-hour, step-by-step lab that builds it; `dbt_solution/` is the finished project. Keep the code blocks in `LEARN_DBT.md` identical to the solution files they produce, and keep the lab's step numbers, checks and expected output in sync when changing either.
 
 ## Commands
 
 ```bash
-make up                      # <engine> compose up -d --build (Kafka, ELK, consumers, control panel, Superset)
+make up                      # <engine> compose up -d --build (Kafka, producer, consumer, control panel, Superset)
 make dbt                     # <engine> compose run --rm dbt build  (the lab project, dbt/)
 make dbt ARGS="test --select source:raw"   # any dbt command, e.g. only the generated source tests
 make solution                # <engine> compose run --rm dbt-solution build  (dbt_solution/, schema vehicle_telemetry_solution)
 make spark                   # spark-sql shell on the shared catalog
 make invalid                 # publish invalid messages so the dbt source tests fail
-make clean                   # down -v and delete ./data (all Kafka/ES/Superset/Spark state)
+make clean                   # down -v and delete ./data (all Kafka/Superset/Spark state)
 make dab-validate            # also dab-deploy, dab-upload, dab-run: the Databricks bundle (settings in gitignored databricks.mk)
 make                         # list all targets
 ```
 
 The maintainer runs the stack with **Podman** (`podman compose`, `podman logs <service>`). The Makefile picks `podman` when installed, else `docker` (override with `ENGINE=docker`). Keep the Compose file and Makefile working with both: no Docker-only features, and fully qualify images in commands run outside Compose (e.g. `docker.io/library/postgres:16-alpine`), because Podman may refuse short names. The docs say `docker compose`; translate to `podman compose` when giving the user commands.
 
-Unit tests (schema converters and the dbt test generator) run on the host and need the generated code first:
+Unit tests (generated code, descriptor set and the dbt test generator) run on the host and need the generated code first:
 
 ```bash
 pip install -r requirements.txt pytest
@@ -31,20 +31,20 @@ python -m pytest schema/tests
 python -m pytest schema/tests/test_dbt_tests.py::test_every_message_is_checked_to_decode
 ```
 
-There is no linter config. UIs: control panel :8090 (links to everything), Superset :8088 (admin/admin), Kibana :5601, Kafka UI :8080, Spark UI :4040; Kafka from the host on `localhost:9094`, Thrift JDBC on `localhost:10000`.
+There is no linter config. UIs: control panel :8090 (links to everything), Superset :8088 (admin/admin), Kafka UI :8080, Spark UI :4040; Kafka from the host on `localhost:9094`, Thrift JDBC on `localhost:10000`.
 
 ## Architecture: the schema drives everything
 
-`schema/proto/` is the single source of truth (`vehicle/v2/vehicle_telemetry.proto` is the envelope: `message_id`, `vehicle_id`, `timestamp`, `events`, and a `Vehicle` field of type `vss.v6.Vehicle`; `vss/v6/vss.proto` is the subset of VSS 6.1 we send, laid out like vss-tools' protobuf exporter: one message per branch named by its path without dots, fields named exactly as the VSS signals (PascalCase), VSS uint8/uint16 → uint32, int8 → int32; `kafka/v1/kafka_record.proto` is the archive file format; `elk/options.proto` defines the custom `(elk.field_type)` and `(elk.geo_point)` options; `buf/validate/validate.proto` is vendored protovalidate). `schema/generate.py` runs `protoc` via grpcio-tools and produces, in `schema/generated/`, the `*_pb2.py` modules, `descriptors/descriptor_set.desc` and the Elasticsearch index template, plus the committed dbt source tests in `dbt/src/sources/raw_vehicle_telemetry.yml`.
+`schema/proto/` is the single source of truth (`vehicle/v2/vehicle_telemetry.proto` is the envelope: `message_id`, `vehicle_id`, `timestamp`, `events`, and a `Vehicle` field of type `vss.v6.Vehicle`; `vss/v6/vss.proto` is the subset of VSS 6.1 we send, laid out like vss-tools' protobuf exporter: one message per branch named by its path without dots, fields named exactly as the VSS signals (PascalCase), VSS uint8/uint16 → uint32, int8 → int32; `kafka/v1/kafka_record.proto` is the archive file format; `buf/validate/validate.proto` is vendored protovalidate). `schema/generate.py` runs `protoc` via grpcio-tools and produces, in `schema/generated/`, the `*_pb2.py` modules and `descriptors/descriptor_set.desc`, plus the committed dbt source tests in `dbt/src/sources/raw_vehicle_telemetry.yml`.
 
-- No hand-written per-field code anywhere. Runtime conversions walk protobuf descriptors: `schema/telemetry_schema/registry.py` loads all generated modules and finds message classes by full name (taken from the Kafka `message-type` header); `elk.py` maps proto types to ES types and adds the `(elk.geo_point)` fields (`Vehicle.CurrentLocation.GeoPoint`, for Kibana Maps); `dbt_tests.py` translates protovalidate rules and enum checks into SQL source tests, one per field including every field of nested messages, named by path (`protobuf_valid__vehicle_telemetry__Vehicle_Speed`); rules it can't translate go to `meta.unchecked_rules`.
+- No hand-written per-field code anywhere. Runtime conversions walk protobuf descriptors: `schema/telemetry_schema/registry.py` loads all generated modules and finds message classes by full name (taken from the Kafka `message-type` header); `dbt_tests.py` translates protovalidate rules and enum checks into SQL source tests, one per field including every field of nested messages, named by path (`protobuf_valid__vehicle_telemetry__Vehicle_Speed`); rules it can't translate go to `meta.unchecked_rules`.
 - Every Python image runs `schema/generate.py` at build time, so after a `.proto` change rebuild (`make up`). The dbt image generates the source tests at build time and its entrypoint copies them into the mounted project. Re-run `python schema/generate.py` and commit the regenerated YAML so schema changes show in the test diff.
 - Schema evolution rules: only add fields with new numbers, never change numbers/types, `reserve` removed numbers; a breaking change needs a new package (v1 → v2 was the switch to VSS; old v1 data needs `make clean`). New VSS signals keep their VSS name, type and unit (documented in the field comment; check https://covesa.github.io/vehicle_signal_specification/). New fields must also be added to the staging model (`dbt_solution/src/models/staging/stg_vehicle_telemetry.sql`, and its copy in step 4.2 of `dbt/LEARN_DBT.md`). The staging model maps the nested VSS paths to flat analytics columns (`Vehicle.Speed` → `speed_kmh`), so the marts never use VSS paths.
 
 ## Spark / dbt / catalog
 
 - The protobuf consumer never decodes messages. Each file is one `kafka.v1.KafkaRecordBatch`; it also writes `_schema/descriptor_set.desc` next to the data on every start. Spark decodes in two `from_protobuf` steps (batch, then each record's bytes, with `emit.default.values`); see `dbt/src/protobuf_macros/telemetry_source.sql` and `raw_protobuf_views.sql`.
-- Delivery is at-least-once (offsets committed after Logstash accepts / after the file is written). ES dedupes by using `message_id` as document id; dbt dedupes on `message_id` in the staging model.
+- Delivery is at-least-once (offsets committed only after the file is written), so a message can be archived twice; dbt dedupes on `message_id` in the staging model.
 - All Spark processes (dbt in-process session mode, `spark-sql`, `spark-thrift-server`) share one Hive metastore in the `metastore-db` Postgres, configured in `spark/spark-defaults.conf` (copied into the image as `SPARK_CONF_DIR`). That is what lets them run concurrently. The metastore schema is pre-created by `metastore/init/*.sql`; `datanucleus.schema.autoCreateAll` must stay false (lazy creation deadlocks).
 - The Postgres JDBC driver, spark-protobuf and Delta Lake are installed into PySpark's own `jars` folder (`spark/install-jars.py`), not via `spark.jars.packages`: the metastore client and the Thrift Server's per-query class loader can't see packages-loaded jars. Keep the spark-protobuf version equal to the PySpark version, and the Delta version matched to it (Delta 4.4.x is for Spark 4.2); both are also in `dbt/profiles.yml`, whose `spark.jars.packages` only applies outside Docker (no `SPARK_CONF_DIR`).
 - Lab layout: `dbt/src/sources/` (generated source YAML, a model-path) and `dbt/src/protobuf_macros/` (provided decoding macros) are shared; `dbt_solution/dbt_project.yml` points its model/macro paths at them (`../dbt/src/...`) and its Compose service `dbt-solution` mounts both folders, uses `DBT_PROFILES_DIR=/dbt` and `DBT_SCHEMA=vehicle_telemetry_solution` (read by `dbt/profiles.yml`). The lab's own macros go in `dbt/src/macros/`, so the two macro folders never define the same name.

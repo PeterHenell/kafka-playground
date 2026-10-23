@@ -2,7 +2,7 @@
 
 A small web app (http://localhost:8090) that shows how many messages have
 been produced, consumed and not consumed yet, and pauses/resumes the
-producer and the consumers.
+producer and the consumer.
 
 - The numbers come from Kafka itself, through the admin API:
     produced      the sum of the topic's end offsets (the next offset each
@@ -54,7 +54,6 @@ RATE_WINDOW_SECONDS = 10
 # The components that can be paused, and the consumer group each one uses.
 COMPONENTS = [
     {"name": "producer", "label": "Producer", "description": "Simulates the vehicles", "group": None},
-    {"name": "consumer", "label": "ELK consumer", "description": "Writes to Logstash / Elasticsearch", "group": "elk-writer"},
     {
         "name": "protobuf-consumer",
         "label": "Protobuf consumer",
@@ -75,12 +74,6 @@ TOOLS = [
                 "Spark (SQL Lab), then build charts and dashboards. Log in with admin / admin.",
     },
     {
-        "name": "Kibana",
-        "port": 5601, "path": "/app/discover", "service": "kibana", "check_path": "/api/status",
-        "uses": "Search and chart the telemetry in Elasticsearch: read messages in Discover, "
-                "follow the vehicles on a map, build dashboards.",
-    },
-    {
         "name": "Kafka UI",
         "port": 8080, "path": "/", "service": "kafka-ui", "check_path": "/",
         "uses": "Look inside Kafka: topics and partitions, the decoded protobuf messages and "
@@ -91,12 +84,6 @@ TOOLS = [
         "port": 4040, "path": "/", "service": "spark-thrift-server", "check_path": "/",
         "uses": "Watch the Spark Thrift Server that runs Superset's queries: jobs, stages, "
                 "timings and SQL query plans.",
-    },
-    {
-        "name": "Elasticsearch API",
-        "port": 9200, "path": "/_cat/indices?v", "service": "elasticsearch", "check_path": "/",
-        "uses": "Query Elasticsearch over HTTP: list the daily indices, check the mapping "
-                "generated from the schema, run searches.",
     },
 ]
 TOOLS_CHECK_HOST = os.getenv("TOOLS_CHECK_HOST")

@@ -25,7 +25,7 @@ source raw.vehicle_telemetry_records ──> stg_vehicle_telemetry ──┬─�
                                                                  └──> vehicle_latest_status  latest reading per vehicle
 ```
 
-- `stg_vehicle_telemetry` removes duplicates. Both consumers deliver
+- `stg_vehicle_telemetry` removes duplicates. The protobuf consumer delivers
   *at-least-once*, so a message can show up in more than one file. It also
   computes the distance driven since each vehicle's previous reading, and
   lower-cases the protobuf enum names (`HARSH_BRAKING` → `harsh_braking`).

@@ -63,14 +63,14 @@ source raw.vehicle_telemetry_records ──> stg_vehicle_telemetry ──┼─�
 Do this the day before: the first build downloads a few GB.
 
 1. You need Docker with Docker Compose (or Podman with `podman compose`),
-   `make`, and about 5 GB of free memory. See
+   `make`, and about 3 GB of free memory. See
    [Getting started](../README.md#getting-started) for Podman details.
 2. Clone the repository and start the playground from its root:
    ```bash
    make up
    ```
 3. Open the control panel at http://localhost:8090. After a minute or two the
-   producer and both consumers should show messages. Leave the playground
+   producer and the protobuf consumer should show messages. Leave the playground
    running: the protobuf consumer writes a file every minute, and the lab
    uses that data.
 
@@ -278,7 +278,7 @@ before you run it:
 -- each signal we use to a column, with the unit in its name, and converts
 -- the units we want differently (the odometer is in meters in VSS).
 --
--- The consumers deliver messages at-least-once, so the same message can end
+-- The consumer delivers messages at-least-once, so the same message can end
 -- up in the files more than once. We keep one row per message_id.
 --
 -- Protobuf enums arrive as their names (HARSH_BRAKING); they are lower-cased
